@@ -7,12 +7,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// maxUpstreamBody caps how much of an upstream (Prometheus / Loki / Tempo)
+// response body we will read before decoding, so a hostile or misbehaving
+// upstream cannot OOM the agent with an unbounded stream. It is a var (not a
+// const) purely so tests can shrink it; production always uses 32 MiB.
+var maxUpstreamBody int64 = 32 << 20 // 32 MiB
 
 type promClient struct {
 	base string
@@ -33,25 +40,44 @@ type promResponse struct {
 	} `json:"data"`
 }
 
-// defaultLiveMetricExpr builds a generic 5xx error-ratio query for the resource.
-func defaultLiveMetricExpr(resource string) string {
+// defaultLiveMetricExpr builds a generic 5xx error-ratio query for the resource,
+// always scoped to the namespace so the default never queries cluster-wide.
+func defaultLiveMetricExpr(namespace, resource string) string {
 	if resource == "" {
-		return `sum(rate(http_requests_total{code=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))`
+		return fmt.Sprintf(
+			`sum(rate(http_requests_total{namespace=%q,code=~"5.."}[5m])) / sum(rate(http_requests_total{namespace=%q}[5m]))`,
+			namespace, namespace)
 	}
 	return fmt.Sprintf(
-		`sum(rate(http_requests_total{service="%s",code=~"5.."}[5m])) / sum(rate(http_requests_total{service="%s"}[5m]))`,
-		resource, resource)
+		`sum(rate(http_requests_total{namespace=%q,service=%q,code=~"5.."}[5m])) / sum(rate(http_requests_total{namespace=%q,service=%q}[5m]))`,
+		namespace, resource, namespace, resource)
 }
 
 func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time) (Result, error) {
+	namespace := ns(scope)
+	resource := liveResource(scope)
+	// Reject names that could break out of the injected label matchers.
+	if err := validateDNS1123("namespace", namespace); err != nil {
+		return Result{}, err
+	}
+	if err := validateDNS1123("resource", resource); err != nil {
+		return Result{}, err
+	}
+
 	expr, _ := args["expr"].(string)
 	if strings.TrimSpace(expr) == "" {
-		expr = defaultLiveMetricExpr(liveResource(scope))
+		// Default query is already namespace-scoped by construction.
+		expr = defaultLiveMetricExpr(namespace, resource)
+	} else {
+		// Caller-supplied expr: force the namespace matcher into every selector
+		// and reject any cross-namespace reference.
+		scoped, err := injectNamespaceMatchers(expr, namespace)
+		if err != nil {
+			return Result{}, fmt.Errorf("query_metrics scope: %w", err)
+		}
+		expr = scoped
 	}
-	step := 60 * time.Second
-	if d := to.Sub(from); d > 0 && d < step {
-		step = d
-	}
+	step := promStep(from, to)
 
 	q := url.Values{}
 	q.Set("query", expr)
@@ -137,7 +163,8 @@ func httpGetJSON(ctx context.Context, hc *http.Client, endpoint string, out any)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("upstream status %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	// Bound the read: never decode more than maxUpstreamBody from the upstream.
+	return json.NewDecoder(io.LimitReader(resp.Body, maxUpstreamBody)).Decode(out)
 }
 
 func orAll(s string) string {

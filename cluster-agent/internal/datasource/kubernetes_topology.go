@@ -11,6 +11,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -81,6 +82,9 @@ func (k *kubeReader) dependencies(ctx context.Context, scope Scope) (Result, err
 
 	dep, err := k.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return unavailable("topology", namespace, name, fmt.Sprintf("Deployment %s/%s 不存在", namespace, name)), nil
+		}
 		return Result{}, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
 	}
 	podLabels := labels.Set(dep.Spec.Template.Labels)

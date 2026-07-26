@@ -118,8 +118,15 @@ func unavailable(source, namespace, resource, why string) Result {
 	}
 }
 
+// maxWindow bounds the effective query window. A caller-supplied range wider
+// than this is truncated (keeping the requested "to" and pulling "from"
+// forward) so a single query cannot ask an upstream for an unbounded span of
+// samples/logs and exhaust memory or the upstream itself.
+const maxWindow = 24 * time.Hour
+
 // window resolves the effective query window from the scope, defaulting to the
-// last 5 minutes ending "now".
+// last 5 minutes ending "now". The window is clamped so it is always positive
+// and never wider than maxWindow.
 func (l *Live) window(scope Scope) (from, to time.Time) {
 	to = l.now().UTC()
 	from = to.Add(-5 * time.Minute)
@@ -131,7 +138,35 @@ func (l *Live) window(scope Scope) (from, to time.Time) {
 			to = t
 		}
 	}
+	// Guard against inverted or empty ranges: fall back to a 5m lookback.
+	if !to.After(from) {
+		from = to.Add(-5 * time.Minute)
+	}
+	// Truncate an over-wide window to the most recent maxWindow.
+	if to.Sub(from) > maxWindow {
+		from = to.Add(-maxWindow)
+	}
 	return from, to
+}
+
+// promStep picks a query_range step that keeps the returned sample count
+// bounded (~<=1000 points) regardless of how wide the window is, so Prometheus
+// is never asked to materialise a massive matrix.
+func promStep(from, to time.Time) time.Duration {
+	const targetPoints = 1000
+	step := 60 * time.Second
+	d := to.Sub(from)
+	if d <= 0 {
+		return step
+	}
+	if d < step {
+		return d
+	}
+	if min := d / targetPoints; min > step {
+		// Round up to whole seconds for a clean step value.
+		step = (min/time.Second + 1) * time.Second
+	}
+	return step
 }
 
 // liveResource returns the effective resource name from the scope.

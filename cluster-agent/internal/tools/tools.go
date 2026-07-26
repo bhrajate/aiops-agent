@@ -47,6 +47,13 @@ func (r *Registry) List() []Tool {
 	return out
 }
 
+// Has reports whether name is a registered tool. Callers (e.g. the HTTP layer)
+// use it to keep unbounded, attacker-controlled names out of metric labels.
+func (r *Registry) Has(name string) bool {
+	_, ok := r.tools[name]
+	return ok
+}
+
 // ErrUnknownTool is returned when a tool name is not registered.
 type ErrUnknownTool struct{ Name string }
 

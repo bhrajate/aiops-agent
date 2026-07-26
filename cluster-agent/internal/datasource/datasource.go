@@ -24,6 +24,14 @@ type ResourceRef struct {
 
 // Scope is injected by the Tool Gateway and constrains every tool call to a
 // single cluster / namespace / resource / time window. Tools MUST honour it.
+//
+// Enforcement in the Live data source (see live.go / live_scope.go):
+//   - Kubernetes tools query only the scoped namespace (Namespaced clients).
+//   - Prometheus / Loki tools force-inject a `namespace="<ns>"` matcher into
+//     every selector and reject caller expressions that reference a different
+//     namespace; resource / namespace names are validated as DNS-1123 so they
+//     cannot break out of the query syntax.
+//   - The time window is clamped to a positive span no wider than 24h.
 type Scope struct {
 	ClusterID string      `json:"cluster_id"`
 	Namespace string      `json:"namespace"`

@@ -32,7 +32,11 @@ func newKubeReader(kubeconfig string) (*kubeReader, error) {
 		return nil, err
 	}
 	// Defensive read-only posture: no write verbs are ever issued regardless,
-	// but we also keep QPS modest since this is a query-only client.
+	// but we also keep QPS modest since this is a query-only client. Explicit
+	// QPS/Burst caps the client-side rate so the agent cannot storm the API
+	// server (defense-in-depth), instead of relying on client-go's defaults.
+	cfg.QPS = 20
+	cfg.Burst = 40
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, err

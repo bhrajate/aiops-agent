@@ -4,6 +4,8 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -12,6 +14,10 @@ import (
 	"github.com/aiops/cluster-agent/internal/datasource"
 	"github.com/aiops/cluster-agent/internal/tools"
 )
+
+// maxRequestBody bounds the POST /tools body so a single request cannot force
+// unbounded memory allocation during JSON decode (defense-in-depth DoS guard).
+const maxRequestBody = 1 << 20 // 1 MiB
 
 // Server wires the tool registry to an http.Handler.
 type Server struct {
@@ -60,11 +66,27 @@ func (s *Server) handleListTools(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("tool_name")
 
+	// metricTool keeps the Prometheus "tool" label bounded: only registered tool
+	// names become label values, everything else collapses to a fixed constant so
+	// an anonymous caller cannot explode label cardinality via random tool names.
+	metricTool := "unknown"
+	if s.reg.Has(name) {
+		metricTool = name
+	}
+
 	var req toolRequest
 	if r.Body != nil {
+		// Cap the body so a large payload cannot force unbounded allocation.
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil && err.Error() != "EOF" {
+		if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				s.metrics.observe(metricTool, "error", 0)
+				writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过大小上限")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid_request", "无法解析请求体: "+err.Error())
 			return
 		}
@@ -84,16 +106,16 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	res, err := s.reg.Invoke(r.Context(), name, req.Scope, req.Arguments)
 	elapsed := time.Since(start).Seconds()
 	if err != nil {
-		if _, ok := err.(tools.ErrUnknownTool); ok {
-			s.metrics.observe(name, "unknown", elapsed)
+		if errors.As(err, &tools.ErrUnknownTool{}) {
+			s.metrics.observe(metricTool, "unknown", elapsed)
 			writeError(w, http.StatusNotFound, "unknown_tool", err.Error())
 			return
 		}
-		s.metrics.observe(name, "error", elapsed)
+		s.metrics.observe(metricTool, "error", elapsed)
 		writeError(w, http.StatusInternalServerError, "tool_error", err.Error())
 		return
 	}
-	s.metrics.observe(name, "ok", elapsed)
+	s.metrics.observe(metricTool, "ok", elapsed)
 	writeJSON(w, http.StatusOK, res)
 }
 

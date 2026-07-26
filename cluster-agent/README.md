@@ -82,9 +82,24 @@ Mock 按 `namespace`/`resource` 映射到一个自洽的故障故事,覆盖设�
 
 Live 实现从三个层面保证只读,详见 `internal/datasource/live.go`、`kubernetes.go` 顶部注释:
 
-1. **Kubernetes**:只调用 `Get` / `List`,从不构造 `create/update/patch/delete/exec/attach/portforward`,`rest.Config` 仅用于构建读客户端,代码中不封装任何 write verb。
-2. **Prometheus / Loki / Tempo**:仅访问各自的查询 GET 端点(query_range / search),无 remote-write、admin、delete-series 调用。
-3. **优雅降级**:上游 URL 或 K8s 客户端缺失时返回 `unavailable` Result,不影响其余工具。
+1. **Kubernetes**:只调用 `Get` / `List`,从不构造 `create/update/patch/delete/exec/attach/portforward`,`rest.Config` 仅用于构建读客户端,代码中不封装任何 write verb。client-go 显式设 `QPS=20 / Burst=40`,限制对 API Server 的客户端侧速率(纵深防御)。
+2. **Prometheus / Loki / Tempo**:仅访问各自的查询 GET 端点(query_range / search),无 remote-write、admin、delete-series 调用。上游响应用 `io.LimitReader`(32 MiB)封顶后再解码,防止上游把 Agent 撑爆(OOM)。
+3. **优雅降级**:上游 URL 或 K8s 客户端缺失、或目标资源 `NotFound` 时返回 `unavailable` Result,不影响其余工具、不误报 500。
+
+### scope 强制注入(namespace 隔离)
+
+`scope` 由 Tool Gateway 传入,cluster-agent **在数据源层强制执行**(不依赖 Gateway 裁剪,见 `internal/datasource/live_scope.go`):
+
+- **Kubernetes**:所有查询走 Namespaced 客户端,只落在 `scope.namespace`。
+- **Prometheus / Loki**:默认查询按 `namespace="<ns>"` 构造;调用方自定义 `expr` / `query` 时,向**每个** `{ ... }` 选择器强制注入 `namespace="<ns>"`,并**拒绝**引用其它 namespace 或使用非精确 `namespace` 匹配(`!=` / `=~` / `!~`)的表达式;缺少 `{ }` 选择器(无法限定)的表达式也一并拒绝。
+- **注入安全**:`namespace` / `resource` 名先按 DNS-1123 字符白名单校验,无法用引号/花括号等突破 PromQL/LogQL 语法。
+- **时间窗**:窗口被夹紧为正向且不超过 24h;Prometheus `step` 按窗口自适应(样本点数 ≲1000)。
+
+### 请求体 / 头部限制(DoS 防护)
+
+- `POST /tools/{tool_name}` 请求体经 `http.MaxBytesReader` 封顶 1 MiB,超限返回 `413 request_too_large`。
+- `http.Server.MaxHeaderBytes` 设为 1 MiB。
+- 未注册的工具名不进入 Prometheus label:`tool` label 仅取白名单内真实工具名,其余统一记为 `unknown`,杜绝匿名高基数攻击。
 
 ### mTLS 服务端(SECURITY §3)
 

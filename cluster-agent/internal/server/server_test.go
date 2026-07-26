@@ -128,6 +128,50 @@ func TestInvokeBadJSON(t *testing.T) {
 	}
 }
 
+// TestMetricsUnknownToolLabel verifies that an unregistered tool name never
+// becomes a Prometheus label value (high-cardinality DoS guard): the /metrics
+// scrape must carry tool="unknown", not the attacker-supplied name.
+func TestMetricsUnknownToolLabel(t *testing.T) {
+	reg := tools.NewRegistry(datasource.NewMock())
+	srv := New("prod-cn-1", reg, nil)
+	h := srv.Handler()
+
+	attacker := "pwn-9f8a7b6c5d"
+	body := `{"scope":{"namespace":"payment"}}`
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/tools/"+attacker, strings.NewReader(body)))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown tool, got %d", rr.Code)
+	}
+
+	mrr := httptest.NewRecorder()
+	h.ServeHTTP(mrr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	scrape := mrr.Body.String()
+	if strings.Contains(scrape, attacker) {
+		t.Errorf("attacker tool name leaked into metrics labels:\n%s", scrape)
+	}
+	if !strings.Contains(scrape, `tool="unknown"`) {
+		t.Errorf("expected tool=\"unknown\" label in metrics, got:\n%s", scrape)
+	}
+}
+
+// TestInvokeBodyTooLarge verifies the request body is capped.
+func TestInvokeBodyTooLarge(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"arguments":{"expr":"`)
+	for i := 0; i < (2 << 20); i++ { // ~2 MiB, above the 1 MiB cap
+		b.WriteByte('a')
+	}
+	b.WriteString(`"},"scope":{"namespace":"payment"}}`)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/tools/query_metrics", strings.NewReader(b.String()))
+	newTestServer().ServeHTTP(rr, req)
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func mustJSON(t *testing.T, r io.Reader, v any) {
 	t.Helper()
 	if err := json.NewDecoder(r).Decode(v); err != nil {

@@ -46,6 +46,9 @@ func main() {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// Bound request headers so an oversized header set cannot exhaust
+		// memory before routing (request bodies are capped in handleInvoke).
+		MaxHeaderBytes: 1 << 20, // 1 MiB
 	}
 
 	go func() {

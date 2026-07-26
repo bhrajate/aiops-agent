@@ -42,9 +42,26 @@ func defaultLogQL(scope Scope) string {
 }
 
 func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time) (Result, error) {
+	// Reject names that could break out of the injected label matchers.
+	if err := validateDNS1123("namespace", ns(scope)); err != nil {
+		return Result{}, err
+	}
+	if err := validateDNS1123("resource", liveResource(scope)); err != nil {
+		return Result{}, err
+	}
+
 	query, _ := args["query"].(string)
 	if strings.TrimSpace(query) == "" {
+		// Default selector is already namespace-scoped by construction.
 		query = defaultLogQL(scope)
+	} else {
+		// Caller-supplied LogQL: force the namespace label into every stream
+		// selector and reject any cross-namespace reference.
+		scoped, err := injectNamespaceMatchers(query, ns(scope))
+		if err != nil {
+			return Result{}, fmt.Errorf("search_logs scope: %w", err)
+		}
+		query = scoped
 	}
 
 	q := url.Values{}

@@ -10,9 +10,14 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
+
+// maxEventList bounds the Events().List page size so a namespace with a huge
+// event backlog cannot force the agent to buffer an unbounded response.
+const maxEventList int64 = 500
 
 // workloadState reports Deployment / ReplicaSet / Pod health for the resource.
 func (k *kubeReader) workloadState(ctx context.Context, scope Scope) (Result, error) {
@@ -24,6 +29,9 @@ func (k *kubeReader) workloadState(ctx context.Context, scope Scope) (Result, er
 
 	dep, err := k.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return unavailable("kubernetes", namespace, name, fmt.Sprintf("Deployment %s/%s 不存在", namespace, name)), nil
+		}
 		return Result{}, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
 	}
 
@@ -80,7 +88,7 @@ func (k *kubeReader) events(ctx context.Context, scope Scope) (Result, error) {
 	namespace := ns(scope)
 	name := liveResource(scope)
 
-	evList, err := k.client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+	evList, err := k.client.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{Limit: maxEventList})
 	if err != nil {
 		return Result{}, fmt.Errorf("list events %s: %w", namespace, err)
 	}
@@ -89,7 +97,10 @@ func (k *kubeReader) events(ctx context.Context, scope Scope) (Result, error) {
 	warnings := 0
 	for i := range evList.Items {
 		e := &evList.Items[i]
-		if name != "" && !strings.Contains(e.InvolvedObject.Name, name) {
+		// Match the target resource exactly, plus its child objects (Pods /
+		// ReplicaSets named "<resource>-..."), instead of a loose substring
+		// contains, which would also catch unrelated siblings.
+		if name != "" && !matchesResource(e.InvolvedObject.Name, name) {
 			continue
 		}
 		if e.Type == corev1.EventTypeWarning {
@@ -118,4 +129,12 @@ func (k *kubeReader) events(ctx context.Context, scope Scope) (Result, error) {
 		"events":     events,
 	}
 	return Result{Source: "kubernetes", Summary: summary, Raw: raw, Freshness: "live"}, nil
+}
+
+// matchesResource reports whether an involvedObject name belongs to the target
+// resource: an exact match, or a child object named "<resource>-<suffix>"
+// (Pods / ReplicaSets under a Deployment). This replaces a loose substring
+// match, which would also catch unrelated siblings sharing a prefix.
+func matchesResource(objName, resource string) bool {
+	return objName == resource || strings.HasPrefix(objName, resource+"-")
 }

@@ -147,6 +147,32 @@ func TestKubeDependenciesMatchService(t *testing.T) {
 	}
 }
 
+func TestKubeWorkloadStateNotFound(t *testing.T) {
+	// Empty clientset: the Deployment does not exist -> unavailable, not error.
+	kr := newKubeReaderWithClient(fake.NewSimpleClientset())
+	res, err := kr.workloadState(context.Background(), liveScope())
+	if err != nil {
+		t.Fatalf("expected graceful unavailable, got error: %v", err)
+	}
+	if res.Source != "kubernetes/unavailable" {
+		t.Errorf("source = %q, want kubernetes/unavailable", res.Source)
+	}
+	if res.Raw.(map[string]any)["available"].(bool) {
+		t.Error("expected available=false for missing deployment")
+	}
+}
+
+func TestKubeDependenciesNotFound(t *testing.T) {
+	kr := newKubeReaderWithClient(fake.NewSimpleClientset())
+	res, err := kr.dependencies(context.Background(), liveScope())
+	if err != nil {
+		t.Fatalf("expected graceful unavailable, got error: %v", err)
+	}
+	if res.Source != "topology/unavailable" {
+		t.Errorf("source = %q, want topology/unavailable", res.Source)
+	}
+}
+
 func TestKubeConformsToDataSourceViaLive(t *testing.T) {
 	// Ensure the fake-backed reader plugs into Live and the interface holds.
 	l := &Live{kube: fakeReader(), now: time.Now}
