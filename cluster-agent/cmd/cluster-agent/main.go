@@ -51,11 +51,28 @@ func main() {
 		MaxHeaderBytes: 1 << 20, // 1 MiB
 	}
 
+	// Dedicated plain-HTTP health endpoint on a separate port. When the tools
+	// port runs mTLS (RequireAndVerifyClientCert), kubelet cannot present a
+	// client cert, so an HTTPS probe against :9100 would always fail. The health
+	// port exposes only /healthz (no tools, no cluster data) for liveness/readiness.
+	healthAddr := env("AIOPS_CLUSTER_AGENT_HEALTH_ADDR", ":9101")
+	healthMux := http.NewServeMux()
+	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	healthSrv := &http.Server{Addr: healthAddr, Handler: healthMux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := healthSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("health server failed", "err", err)
+		}
+	}()
+
 	go func() {
 		tlsEnabled := tlsCfg != nil
 		log.Info("cluster-agent starting",
-			"addr", addr, "cluster_id", clusterID, "datasource", mode,
-			"mode", "read-only", "mtls", tlsEnabled)
+			"addr", addr, "health_addr", healthAddr, "cluster_id", clusterID,
+			"datasource", mode, "mode", "read-only", "mtls", tlsEnabled)
 		var serveErr error
 		if tlsEnabled {
 			// Certs/keys already loaded into TLSConfig; pass empty paths.
@@ -79,6 +96,7 @@ func main() {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 	}
+	_ = healthSrv.Shutdown(shutdownCtx)
 }
 
 func env(key, def string) string {

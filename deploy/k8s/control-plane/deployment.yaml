@@ -51,6 +51,9 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: control-plane
+      # 优雅终止:公共 API 有长连接 SSE(心跳/时间线),滚动更新/缩容时给足排空时间;
+      # preStop 先摘流量再等在途请求收尾(配合 server graceful shutdown)。
+      terminationGracePeriodSeconds: 45
       containers:
         - name: control-plane
           # ⚠️ 占位版本 tag,禁用 :latest(不可复现、无法回滚)。发布时替换为实际版本或 digest。

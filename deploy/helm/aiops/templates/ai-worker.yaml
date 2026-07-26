@@ -49,14 +49,14 @@ spec:
           # 无入站端口:进程存在性作探针。
           livenessProbe:
             exec:
-              command: ["/bin/sh", "-c", "grep -qa aiops_worker /proc/*/cmdline"]
+              command: ["/bin/sh", "-c", "grep -qa '[a]iops_worker' /proc/*/cmdline"]
             initialDelaySeconds: 20
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
             exec:
-              command: ["/bin/sh", "-c", "grep -qa aiops_worker /proc/*/cmdline"]
+              command: ["/bin/sh", "-c", "grep -qa '[a]iops_worker' /proc/*/cmdline"]
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5

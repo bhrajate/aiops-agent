@@ -1,0 +1,53 @@
+# PodDisruptionBudget:节点自愿中断(drain/升级)时,保证每个组件至少留 1 个可用副本,
+# 避免一次排空干掉某组件全部副本导致短时不可用。
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane-pdb
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-worker-pdb
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cluster-agent-pdb
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-agent
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend

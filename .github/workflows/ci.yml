@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ['v*']       # 版本 tag 触发镜像发布(推 :<version>)
   pull_request:
     branches: [main, master]
 
@@ -133,14 +134,15 @@ jobs:
           go-version-file: control-plane/go.mod
           cache-dependency-path: control-plane/go.sum
       - name: Load schema
+        # schema 应用失败应让 job 失败(不再 || true 掩盖),否则集成测试会误跑在坏库上。
         run: |
           for f in ../shared/sql/*.sql; do
             echo ">> applying $f";
-            PGPASSWORD=aiops psql -h localhost -U aiops -d aiops -f "$f" || true;
+            PGPASSWORD=aiops psql -h localhost -U aiops -d aiops -f "$f";
           done
-      - name: go test (DB-tagged)
-        # 若项目用 build tag 隔离集成测试(如 //go:build integration),在此启用。
-        run: go test -count=1 ./... -run 'DB|Integration' || go test -count=1 ./...
+      - name: go test (DB + integration)
+        # 显式跑 DB/集成用例(依赖上面的 Postgres service);失败即失败,不回退掩盖。
+        run: go test -count=1 ./... -run 'DB|Integration'
 
   # ---------------------------------------------------------------- Docker images
   docker:
@@ -166,16 +168,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      # 仅默认分支登录并推送到 GHCR;PR 只构建不推送。
-      - name: Set push flag
+      # 推送策略:默认分支推 :sha 与 :edge;版本 tag(v*)推 :<version>,
+      # 与 K8s 清单/Helm 使用的固定版本 tag 对齐(修复发布链断裂)。PR 只构建不推。
+      - name: Set push flags
         id: flags
         run: |
-          if [ "${{ github.event_name }}" = "push" ] && \
-             { [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/master" ]; }; then
-            echo "push=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "push=false" >> "$GITHUB_OUTPUT"
+          push=false; tags=""
+          repo="ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            case "${{ github.ref }}" in
+              refs/heads/main|refs/heads/master)
+                push=true
+                tags="$repo:${{ github.sha }},$repo:edge" ;;
+              refs/tags/v*)
+                push=true
+                ver="${GITHUB_REF#refs/tags/}"
+                tags="$repo:${ver},$repo:${{ github.sha }}" ;;
+            esac
           fi
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
       - name: Login to GHCR
         if: steps.flags.outputs.push == 'true'
         uses: docker/login-action@v3
@@ -183,12 +195,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build (and push on default branch)
+      - name: Build (and push on default branch / version tag)
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: ${{ steps.flags.outputs.push }}
-          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.component }}:${{ github.sha }}
+          tags: ${{ steps.flags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

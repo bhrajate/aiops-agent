@@ -90,7 +90,7 @@ export function IncidentListPage() {
             message={
               error instanceof HttpError
                 ? `${error.message}(${error.code})`
-                : '加载失败,请确认后端 :8080 已启动'
+                : '加载失败,请确认后端 :8088 已启动'
             }
             onRetry={() => refetch()}
           />

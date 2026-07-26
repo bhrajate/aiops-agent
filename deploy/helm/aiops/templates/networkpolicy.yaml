@@ -167,6 +167,19 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $eg.clusterAgentPort }}
+    # 外部 HTTPS 443:企业 OIDC/JWKS 与外部 S3(排除私网防 SSRF)。生产
+    # authMode=oidc + 外部 s3Endpoint 依赖此规则,否则 default-deny 阻断鉴权/证据写入。
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
 ---
 # ai-worker 出站:Temporal、control-plane 内部 API、PostgreSQL、外部模型 API(443)。
 apiVersion: networking.k8s.io/v1

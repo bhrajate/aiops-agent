@@ -15,7 +15,7 @@ interface UseSSEResult {
 
 /**
  * 订阅调查实时时间线:GET /v1/investigations/{id}/events (text/event-stream)。
- * 使用浏览器原生 EventSource,自动重连;通过 Vite dev proxy 转发到 :8080。
+ * 使用浏览器原生 EventSource,自动重连;通过 Vite dev proxy 转发到 :8088。
  * 事件 data 约定为 JSON(InvestigationEvent),兼容纯文本。
  */
 export function useSSE(

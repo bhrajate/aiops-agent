@@ -58,16 +58,20 @@ spec:
           ports:
             - name: tools
               containerPort: 9100
+            - name: health
+              containerPort: 9101
           envFrom:
             - configMapRef:
                 name: aiops-config
             - secretRef:
                 name: aiops-secrets
+          # 探针走独立明文 health 端口(:9101):tools 端口开 mTLS 时 kubelet 无客户端证书,
+          # HTTPS 探针会握手失败永不 Ready。health 端口只暴露 /healthz,不含工具与集群数据。
           readinessProbe:
             httpGet:
               path: /healthz
-              port: tools
-              scheme: HTTPS
+              port: health
+              scheme: HTTP
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
@@ -75,8 +79,8 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              port: tools
-              scheme: HTTPS
+              port: health
+              scheme: HTTP
             initialDelaySeconds: 15
             periodSeconds: 20
             timeoutSeconds: 3
