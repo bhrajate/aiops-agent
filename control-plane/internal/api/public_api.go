@@ -5,12 +5,16 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/aiops/control-plane/internal/auth"
 	"github.com/aiops/control-plane/internal/httpx"
+	"github.com/aiops/control-plane/internal/model"
 	"github.com/aiops/control-plane/internal/store"
 	"github.com/aiops/control-plane/internal/trigger"
 )
@@ -23,15 +27,22 @@ type Signaler interface {
 
 // PublicAPI 面向前端与外部 webhook。
 type PublicAPI struct {
-	store   *store.Store
-	ingress *Ingress
-	orch    *trigger.Orchestrator
-	tempo   Signaler
-	log     *slog.Logger
+	store      *store.Store
+	ingress    *Ingress
+	orch       *trigger.Orchestrator
+	tempo      Signaler
+	authn      *auth.Authenticator
+	devUsers   map[string]auth.DevUser
+	agentScope auth.AgentServiceScope
+	log        *slog.Logger
 }
 
-func NewPublicAPI(s *store.Store, ingress *Ingress, orch *trigger.Orchestrator, tempo Signaler, log *slog.Logger) *PublicAPI {
-	return &PublicAPI{store: s, ingress: ingress, orch: orch, tempo: tempo, log: log}
+func NewPublicAPI(s *store.Store, ingress *Ingress, orch *trigger.Orchestrator, tempo Signaler,
+	authn *auth.Authenticator, agentScope auth.AgentServiceScope, log *slog.Logger) *PublicAPI {
+	return &PublicAPI{
+		store: s, ingress: ingress, orch: orch, tempo: tempo,
+		authn: authn, devUsers: auth.DefaultDevUsers(), agentScope: agentScope, log: log,
+	}
 }
 
 func (a *PublicAPI) Routes() http.Handler {
@@ -44,7 +55,11 @@ func (a *PublicAPI) Routes() http.Handler {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": st})
 	})
 
-	mux.HandleFunc("POST /v1/signals", a.ingress.PostSignal)
+	// 认证端点(仅 hs256 开发模式;SECURITY §1)
+	mux.HandleFunc("POST /v1/auth/login", a.login)
+	mux.HandleFunc("GET /v1/auth/me", a.me)
+
+	mux.HandleFunc("POST /v1/signals", a.ingress.PostSignal) // 自有 webhook 鉴权
 	mux.HandleFunc("GET /v1/incidents", a.listIncidents)
 	mux.HandleFunc("GET /v1/incidents/{id}", a.getIncident)
 	mux.HandleFunc("POST /v1/incidents/{id}/investigations", a.startInvestigation)
@@ -55,10 +70,56 @@ func (a *PublicAPI) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/evidence/{id}", a.getEvidence)
 	mux.HandleFunc("GET /v1/knowledge", a.searchKnowledge)
 
-	return httpx.CORS(httpx.Logging(a.log, mux))
+	// 认证中间件:跳过 healthz / 登录 / signals(webhook 自有鉴权)
+	skip := func(r *http.Request) bool {
+		p := r.URL.Path
+		return p == "/healthz" || p == "/v1/auth/login" || p == "/v1/signals"
+	}
+	return httpx.CORS(httpx.Logging(a.log, a.authn.Middleware(skip, mux)))
+}
+
+// --- 认证端点 ---
+
+func (a *PublicAPI) login(w http.ResponseWriter, r *http.Request) {
+	if a.authn.Mode() != auth.ModeHS256 {
+		httpx.Error(w, http.StatusNotFound, "not_found", "login endpoint disabled (use IdP)")
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !httpx.Decode(w, r, &body) {
+		return
+	}
+	p, ok := auth.VerifyDevUser(a.devUsers, body.Username, body.Password)
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized", "invalid credentials")
+		return
+	}
+	tok, err := a.authn.Issue(p, time.Hour)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "token_error", err.Error())
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"token": tok, "expires_in": 3600, "user": p})
+}
+
+func (a *PublicAPI) me(w http.ResponseWriter, r *http.Request) {
+	p, ok := auth.FromContext(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized", "no principal")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, p)
 }
 
 func (a *PublicAPI) listIncidents(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.FromContext(r.Context())
+	if !p.Can(auth.ActionReadIncident) {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "missing read permission")
+		return
+	}
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	incs, err := a.store.ListIncidents(r.Context(), q.Get("status"), q.Get("severity"), limit)
@@ -66,7 +127,38 @@ func (a *PublicAPI) listIncidents(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"incidents": incs})
+	// ABAC:过滤到用户可见的集群/命名空间
+	visible := incs[:0]
+	for _, inc := range incs {
+		ns := ""
+		if len(inc.AffectedResources) > 0 {
+			ns = inc.AffectedResources[0].Namespace
+		}
+		if p.InScope(inc.ClusterID, ns) {
+			visible = append(visible, inc)
+		}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"incidents": visible})
+}
+
+// authorizeIncident 校验读权限 + ABAC 范围(用户∩Agent∩Incident),返回是否放行。
+func (a *PublicAPI) authorizeIncident(w http.ResponseWriter, r *http.Request, inc model.Incident, action auth.Action) bool {
+	p, _ := auth.FromContext(r.Context())
+	if !p.Can(action) {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "missing permission for action")
+		return false
+	}
+	ns := ""
+	if len(inc.AffectedResources) > 0 {
+		ns = inc.AffectedResources[0].Namespace
+	}
+	if !auth.EffectiveAccess(p, a.agentScope, inc.ClusterID, ns) {
+		a.store.Audit(r.Context(), inc.TenantID, p.Subject, string(action), "incident", inc.IncidentID, "denied",
+			map[string]any{"cluster": inc.ClusterID, "namespace": ns}, map[string]any{"reason": "out_of_scope"})
+		httpx.Error(w, http.StatusForbidden, "forbidden", "incident out of your access scope")
+		return false
+	}
+	return true
 }
 
 func (a *PublicAPI) getIncident(w http.ResponseWriter, r *http.Request) {
@@ -75,30 +167,53 @@ func (a *PublicAPI) getIncident(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "incident not found")
 		return
 	}
+	if !a.authorizeIncident(w, r, inc, auth.ActionReadIncident) {
+		return
+	}
 	invs, _ := a.store.ListInvestigationsByIncident(r.Context(), inc.IncidentID)
 	httpx.JSON(w, http.StatusOK, map[string]any{"incident": inc, "investigations": invs})
 }
 
 func (a *PublicAPI) startInvestigation(w http.ResponseWriter, r *http.Request) {
 	incidentID := r.PathValue("id")
-	// Idempotency-Key(文档 17.2):同 key 重复请求不重复启动
-	idemKey := r.Header.Get("Idempotency-Key")
-	triggeredBy := userOrDefault(r)
+	p, _ := auth.FromContext(r.Context())
 
+	inc, err := a.store.GetIncident(r.Context(), incidentID)
+	if err != nil {
+		httpx.Error(w, http.StatusNotFound, "not_found", "incident not found")
+		return
+	}
+	// RBAC + ABAC(用户∩Agent∩Incident)
+	if !a.authorizeIncident(w, r, inc, auth.ActionStartInvestig) {
+		return
+	}
+
+	// Idempotency-Key(SECURITY §5):同 key 返回首次结果,不重复启动
+	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idemKey != "" {
+		if resultID, found, e := a.store.GetIdempotentResult(r.Context(), idemKey); e == nil && found {
+			if inv, ge := a.store.GetInvestigation(r.Context(), resultID); ge == nil {
+				httpx.JSON(w, http.StatusOK, inv)
+				return
+			}
+		}
+	}
+
+	// body 可选:容忍空 body,不写错误响应(避免与后续响应重复)
 	var body struct {
 		Reason string `json:"reason"`
 	}
-	_ = httpx.Decode(w, r, &body) // body 可选
-
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body) // 忽略 EOF/空 body
+	}
 	reason := body.Reason
 	if reason == "" {
 		reason = "manual_request"
 	}
-	// 简易幂等:若已存在活跃调查,直接返回它
-	inv, err := a.orch.StartInvestigation(r.Context(), incidentID, triggeredBy, reason, nil)
+
+	inv, err := a.orch.StartInvestigation(r.Context(), incidentID, p.Subject, reason, nil)
 	if err != nil {
 		if se, ok := err.(*trigger.StopError); ok {
-			// 已有同版本活跃调查:返回现有的(幂等语义)
 			invs, _ := a.store.ListInvestigationsByIncident(r.Context(), incidentID)
 			for _, iv := range invs {
 				if iv.Phase != "closed" && iv.Phase != "cancelled" {
@@ -112,7 +227,9 @@ func (a *PublicAPI) startInvestigation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "start_failed", err.Error())
 		return
 	}
-	_ = idemKey
+	if idemKey != "" {
+		_, _ = a.store.PutIdempotentResult(r.Context(), idemKey, "start_investigation", incidentID, inv.InvestigationID)
+	}
 	httpx.JSON(w, http.StatusAccepted, inv)
 }
 
@@ -121,6 +238,11 @@ func (a *PublicAPI) getInvestigation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
 		return
+	}
+	if inc, e := a.store.GetIncident(r.Context(), inv.IncidentID); e == nil {
+		if !a.authorizeIncident(w, r, inc, auth.ActionReadIncident) {
+			return
+		}
 	}
 	hyps, _ := a.store.ListHypotheses(r.Context(), inv.InvestigationID)
 	evs, _ := a.store.ListEvidenceByInvestigation(r.Context(), inv.InvestigationID)
@@ -139,6 +261,14 @@ func (a *PublicAPI) getEvidence(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "evidence not found")
 		return
 	}
+	// 经证据所属调查的 Incident 做 ABAC
+	if inv, e := a.store.GetInvestigation(r.Context(), ev.InvestigationID); e == nil {
+		if inc, e2 := a.store.GetIncident(r.Context(), inv.IncidentID); e2 == nil {
+			if !a.authorizeIncident(w, r, inc, auth.ActionReadEvidence) {
+				return
+			}
+		}
+	}
 	httpx.JSON(w, http.StatusOK, ev)
 }
 
@@ -149,14 +279,6 @@ func (a *PublicAPI) searchKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-func userOrDefault(r *http.Request) string {
-	// 首版:从 header 取用户名(生产接 OIDC)。缺省 system。
-	if u := r.Header.Get("X-User"); u != "" {
-		return u
-	}
-	return "operator"
 }
 
 func randHex(n int) string {

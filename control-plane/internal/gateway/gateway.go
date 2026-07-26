@@ -42,14 +42,20 @@ var evidenceType = map[string]string{
 	"retrieve_runbook":      "knowledge",
 }
 
+// RawSnapshotStore 抽象对象存储上传(便于降级:未配置时跳过)。
+type RawSnapshotStore interface {
+	PutJSON(ctx context.Context, key string, data []byte) (string, error)
+}
+
 type Gateway struct {
 	store *store.Store
 	agent *agentclient.Client
+	obj   RawSnapshotStore // 可为 nil(降级:仅存摘要)
 	log   *slog.Logger
 }
 
-func New(s *store.Store, agent *agentclient.Client, log *slog.Logger) *Gateway {
-	return &Gateway{store: s, agent: agent, log: log}
+func New(s *store.Store, agent *agentclient.Client, obj RawSnapshotStore, log *slog.Logger) *Gateway {
+	return &Gateway{store: s, agent: agent, obj: obj, log: log}
 }
 
 // InvokeRequest 来自 AI Worker 的工具调用请求。
@@ -121,8 +127,21 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 	redacted = redacted || r2
 
 	// 7) 冻结为不可变 Evidence
+	evID := "ev-" + randHex(10)
+
+	// 原始快照(脱敏后)上传对象存储,库里只留 raw_ref(SECURITY §6;最小化进模型内容)
+	rawRef := ""
+	if g.obj != nil {
+		key := fmt.Sprintf("%s/%s.json", req.InvestigationID, evID)
+		if ref, uerr := g.obj.PutJSON(ctx, key, []byte(redactedRaw)); uerr != nil {
+			g.log.Warn("evidence snapshot upload failed (summary still persisted)", "err", uerr)
+		} else {
+			rawRef = ref
+		}
+	}
+
 	ev := model.Evidence{
-		EvidenceID:      "ev-" + randHex(10),
+		EvidenceID:      evID,
 		TenantID:        tenant,
 		InvestigationID: req.InvestigationID,
 		Type:            evidenceType[req.Tool],
@@ -131,6 +150,7 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 		Query:           map[string]any{"arguments": req.Arguments, "scope": scope},
 		TimeRange:       scope.TimeRange,
 		Summary:         res.Summary,
+		RawRef:          rawRef,
 		ContentHash:     hashStr(res.Summary + redactedRaw),
 		Freshness:       res.Freshness,
 		RedactionStatus: redactionStatus(redacted),

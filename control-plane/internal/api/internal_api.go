@@ -4,6 +4,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/aiops/control-plane/internal/auth"
 	"github.com/aiops/control-plane/internal/gateway"
 	"github.com/aiops/control-plane/internal/httpx"
 	"github.com/aiops/control-plane/internal/model"
@@ -15,11 +16,12 @@ import (
 type InternalAPI struct {
 	store   *store.Store
 	gateway *gateway.Gateway
+	token   string // 共享密钥(SECURITY §2)
 	log     *slog.Logger
 }
 
-func NewInternalAPI(s *store.Store, gw *gateway.Gateway, log *slog.Logger) *InternalAPI {
-	return &InternalAPI{store: s, gateway: gw, log: log}
+func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, log *slog.Logger) *InternalAPI {
+	return &InternalAPI{store: s, gateway: gw, token: token, log: log}
 }
 
 func (a *InternalAPI) Routes() http.Handler {
@@ -34,7 +36,8 @@ func (a *InternalAPI) Routes() http.Handler {
 	mux.HandleFunc("POST /internal/investigations/{id}/hypotheses", a.setHypotheses)
 	mux.HandleFunc("POST /internal/investigations/{id}/diagnosis", a.setDiagnosis)
 	mux.HandleFunc("POST /internal/investigations/{id}/usage", a.setUsage)
-	return httpx.Logging(a.log, mux)
+	// 内部 API 共享密钥保护(仅集群内可达)
+	return auth.RequireInternalToken(a.token, httpx.Logging(a.log, mux))
 }
 
 func (a *InternalAPI) invokeTool(w http.ResponseWriter, r *http.Request) {

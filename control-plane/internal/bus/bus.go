@@ -4,6 +4,7 @@ package bus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -57,15 +58,30 @@ func NewConsumer(brokers []string, topic, group string) *Consumer {
 // Handler 处理一条消息;返回 nil 才提交 offset。
 type Handler func(ctx context.Context, key, value []byte) error
 
+// DeadLetterFunc 在消息重试超限后调用(投递到 DLQ),返回 nil 表示已妥善归档、可提交跳过。
+type DeadLetterFunc func(ctx context.Context, topic, key string, value []byte, lastErr error, attempts int) error
+
+// RunOptions 消费选项。
+type RunOptions struct {
+	Topic        string
+	MaxAttempts  int            // 超过则进 DLQ(<=0 表示无限重试)
+	OnDeadLetter DeadLetterFunc // MaxAttempts 生效时必须提供
+}
+
 // Run 持续消费直至 ctx 取消。处理失败不提交(至少一次,下次重投)。
 func (c *Consumer) Run(ctx context.Context, h Handler) error {
+	return c.RunWithOptions(ctx, h, RunOptions{})
+}
+
+// RunWithOptions 支持重试上限 + 死信队列(SECURITY §7)。
+func (c *Consumer) RunWithOptions(ctx context.Context, h Handler, opts RunOptions) error {
+	attempts := make(map[string]int) // offset 维度的重试计数
 	for {
 		m, err := c.reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
-			// 短暂退避后重试
 			select {
 			case <-ctx.Done():
 				return nil
@@ -73,17 +89,36 @@ func (c *Consumer) Run(ctx context.Context, h Handler) error {
 				continue
 			}
 		}
-		if err := h(ctx, m.Key, m.Value); err != nil {
-			// 处理失败:不提交,退避后由后续 fetch 重投
+		offKey := offsetKey(m.Partition, m.Offset)
+		if herr := h(ctx, m.Key, m.Value); herr != nil {
+			attempts[offKey]++
+			if opts.MaxAttempts > 0 && attempts[offKey] >= opts.MaxAttempts {
+				// 超限:投 DLQ,然后提交跳过,避免毒消息卡住分区
+				if opts.OnDeadLetter != nil {
+					if dlErr := opts.OnDeadLetter(ctx, opts.Topic, string(m.Key), m.Value, herr, attempts[offKey]); dlErr != nil {
+						// DLQ 也失败:继续重试,不提交
+						time.Sleep(500 * time.Millisecond)
+						continue
+					}
+				}
+				delete(attempts, offKey)
+				_ = c.reader.CommitMessages(ctx, m)
+				continue
+			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
+		delete(attempts, offKey)
 		if err := c.reader.CommitMessages(ctx, m); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 		}
 	}
+}
+
+func offsetKey(partition int, offset int64) string {
+	return fmt.Sprintf("%d:%d", partition, offset)
 }
 
 func (c *Consumer) Close() error { return c.reader.Close() }

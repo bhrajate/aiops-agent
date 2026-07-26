@@ -22,10 +22,12 @@ import (
 
 	"github.com/aiops/control-plane/internal/agentclient"
 	"github.com/aiops/control-plane/internal/api"
+	"github.com/aiops/control-plane/internal/auth"
 	"github.com/aiops/control-plane/internal/bus"
 	"github.com/aiops/control-plane/internal/config"
 	"github.com/aiops/control-plane/internal/gateway"
 	"github.com/aiops/control-plane/internal/incident"
+	"github.com/aiops/control-plane/internal/objstore"
 	"github.com/aiops/control-plane/internal/outbox"
 	"github.com/aiops/control-plane/internal/store"
 	"github.com/aiops/control-plane/internal/temporalx"
@@ -68,15 +70,52 @@ func main() {
 	publisher := bus.NewPublisher(cfg.KafkaBrokers)
 	defer publisher.Close()
 
+	// ---- 认证器(SECURITY §1)----
+	authn := auth.NewAuthenticator(auth.Config{
+		Mode:     auth.Mode(cfg.AuthMode),
+		HS256Key: cfg.HS256Secret,
+		Issuer:   cfg.Issuer,
+		Audience: cfg.Audience,
+		// OIDC verifier 生产接入(JWKS);此处 hs256/disabled 无需
+	})
+	if cfg.AuthMode == "disabled" {
+		log.Warn("AUTH DISABLED — 仅限本地测试,切勿用于生产")
+	}
+
+	// ---- 对象存储(证据快照,SECURITY §6;不可用则降级)----
+	var rawStore gateway.RawSnapshotStore
+	if os, oerr := objstore.New(ctx, cfg.S3Endpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3Bucket, cfg.S3UseSSL); oerr != nil {
+		log.Warn("object storage unavailable, evidence snapshots disabled (summaries still persisted)", "err", oerr)
+	} else {
+		rawStore = os
+		log.Info("connected to object storage", "bucket", cfg.S3Bucket)
+	}
+
+	// ---- Cluster Agent 客户端(mTLS 可选,SECURITY §3)----
+	var agent *agentclient.Client
+	if cfg.AgentMTLSEnabled {
+		ac, aerr := agentclient.NewMTLS(cfg.ClusterAgentURL, agentclient.MTLSConfig{
+			ClientCert: cfg.AgentClientCert, ClientKey: cfg.AgentClientKey, CA: cfg.AgentCA,
+		})
+		if aerr != nil {
+			log.Error("mTLS client init failed", "err", aerr)
+			os.Exit(1)
+		}
+		agent = ac
+		log.Info("cluster-agent client using mTLS", "url", cfg.ClusterAgentURL)
+	} else {
+		agent = agentclient.New(cfg.ClusterAgentURL)
+	}
+
 	// ---- 组件装配 ----
-	agent := agentclient.New(cfg.ClusterAgentURL)
-	gw := gateway.New(st, agent, log)
+	gw := gateway.New(st, agent, rawStore, log)
 	mgr := incident.New(st, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant, log)
-	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, log)
+	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, log)
 
-	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, log)
-	internalAPI := api.NewInternalAPI(st, gw, log)
+	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
+	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, log)
+	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, log)
 
 	outboxPub := outbox.New(st, publisher, log)
 
@@ -86,6 +125,21 @@ func main() {
 	wg.Add(1)
 	go func() { defer wg.Done(); outboxPub.Run(ctx, 500*time.Millisecond) }()
 
+	// DLQ 回调:重试超限的消息落 dead_letters 表 + 审计告警(SECURITY §7)
+	deadLetter := func(ctx context.Context, topic, key string, value []byte, lastErr error, attempts int) error {
+		errMsg := ""
+		if lastErr != nil {
+			errMsg = lastErr.Error()
+		}
+		if err := st.InsertDeadLetter(ctx, topic, key, value, errMsg, attempts); err != nil {
+			return err
+		}
+		st.Audit(ctx, cfg.Tenant, "system", "dead_letter", topic, key, "error", nil,
+			map[string]any{"attempts": attempts, "error": errMsg})
+		log.Warn("message dead-lettered", "topic", topic, "key", key, "attempts", attempts, "err", errMsg)
+		return nil
+	}
+
 	// ---- 消费者:signals → Incident Manager ----
 	sigConsumer := bus.NewConsumer(cfg.KafkaBrokers, "signals", "incident-manager")
 	wg.Add(1)
@@ -93,7 +147,9 @@ func main() {
 		defer wg.Done()
 		defer sigConsumer.Close()
 		log.Info("incident-manager consuming signals")
-		_ = sigConsumer.Run(ctx, mgr.HandleSignal)
+		_ = sigConsumer.RunWithOptions(ctx, mgr.HandleSignal, bus.RunOptions{
+			Topic: "signals", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
+		})
 	}()
 
 	// ---- 消费者:incidents → Trigger/Orchestrator ----
@@ -103,7 +159,9 @@ func main() {
 		defer wg.Done()
 		defer incConsumer.Close()
 		log.Info("trigger-policy consuming incidents")
-		_ = incConsumer.Run(ctx, orch.HandleIncidentEvent)
+		_ = incConsumer.RunWithOptions(ctx, orch.HandleIncidentEvent, bus.RunOptions{
+			Topic: "incidents", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
+		})
 	}()
 
 	// ---- HTTP 服务 ----

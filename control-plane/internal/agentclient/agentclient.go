@@ -4,10 +4,13 @@ package agentclient
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -21,6 +24,42 @@ func New(baseURL string) *Client {
 		baseURL: baseURL,
 		http:    &http.Client{Timeout: 15 * time.Second},
 	}
+}
+
+// MTLSConfig 客户端 mTLS 配置(SECURITY §3)。
+type MTLSConfig struct {
+	ClientCert string
+	ClientKey  string
+	CA         string
+}
+
+// NewMTLS 创建启用 mTLS 的客户端(向 cluster-agent 出示客户端证书并校验服务端)。
+func NewMTLS(baseURL string, cfg MTLSConfig) (*Client, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.CA)
+	if err != nil {
+		return nil, fmt.Errorf("read ca: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("parse ca")
+	}
+	return &Client{
+		baseURL: baseURL,
+		http: &http.Client{
+			Timeout: 15 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					Certificates: []tls.Certificate{cert},
+					RootCAs:      pool,
+					MinVersion:   tls.VersionTLS12,
+				},
+			},
+		},
+	}, nil
 }
 
 // Scope 工具调用范围(由 Gateway 注入)。

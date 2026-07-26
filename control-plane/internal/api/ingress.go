@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -11,29 +12,47 @@ import (
 	"github.com/aiops/control-plane/internal/httpx"
 	"github.com/aiops/control-plane/internal/model"
 	"github.com/aiops/control-plane/internal/store"
+	"github.com/aiops/control-plane/internal/webhookauth"
 )
 
 // Ingress 是 Signal Ingress(文档 6.1):鉴权、快速 2xx、标准化、持久化+outbox。
 // Webhook 是信号入口,不是 RCA 触发器 —— 这里绝不等待模型或调查。
 type Ingress struct {
-	store     *store.Store
-	clusterID string
-	tenant    string
-	log       *slog.Logger
+	store         *store.Store
+	clusterID     string
+	tenant        string
+	webhookSecret string
+	log           *slog.Logger
 }
 
-func NewIngress(s *store.Store, clusterID, tenant string, log *slog.Logger) *Ingress {
-	return &Ingress{store: s, clusterID: clusterID, tenant: tenant, log: log}
+func NewIngress(s *store.Store, clusterID, tenant, webhookSecret string, log *slog.Logger) *Ingress {
+	return &Ingress{store: s, clusterID: clusterID, tenant: tenant, webhookSecret: webhookSecret, log: log}
 }
 
 // PostSignal 接收信号。支持两种载荷:
 //  1. 原生 Signal(带 signal_type 字段);
 //  2. Alertmanager webhook(带 alerts 数组)。
 func (i *Ingress) PostSignal(w http.ResponseWriter, r *http.Request) {
-	body := http.MaxBytesReader(w, r.Body, 2<<20)
+	rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_request", "cannot read body")
+		return
+	}
+
+	// Webhook HMAC 签名校验(SECURITY §4)
+	ok, checked := webhookauth.Verify(i.webhookSecret, r.Header.Get("X-AIOPS-Signature"), rawBody)
+	if !ok {
+		i.store.Audit(r.Context(), i.tenant, "ingress", "signal_ingest", "signal", "", "denied",
+			map[string]any{"cluster": i.clusterID}, map[string]any{"reason": "bad_webhook_signature"})
+		httpx.Error(w, http.StatusUnauthorized, "unauthorized", "invalid webhook signature")
+		return
+	}
+	if !checked {
+		i.log.Warn("webhook signature not verified (no secret configured) — set AIOPS_WEBHOOK_SECRET for production")
+	}
+
 	var raw map[string]json.RawMessage
-	dec := json.NewDecoder(body)
-	if err := dec.Decode(&raw); err != nil {
+	if err := json.Unmarshal(rawBody, &raw); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "bad_request", "invalid json")
 		return
 	}

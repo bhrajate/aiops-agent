@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/aiops/control-plane/internal/auth"
 	"github.com/aiops/control-plane/internal/httpx"
 	"github.com/aiops/control-plane/internal/model"
 )
@@ -89,6 +90,11 @@ func (a *PublicAPI) cancelInvestigation(w http.ResponseWriter, r *http.Request) 
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
 		return
 	}
+	if inc, e := a.store.GetIncident(r.Context(), inv.IncidentID); e == nil {
+		if !a.authorizeIncident(w, r, inc, auth.ActionCancelInvestig) {
+			return
+		}
+	}
 	if a.tempo != nil && inv.WorkflowID != "" {
 		if err := a.tempo.Cancel(r.Context(), inv.WorkflowID); err != nil {
 			a.log.Warn("temporal cancel failed", "workflow", inv.WorkflowID, "err", err)
@@ -98,8 +104,12 @@ func (a *PublicAPI) cancelInvestigation(w http.ResponseWriter, r *http.Request) 
 		httpx.Error(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	_, _ = a.store.AppendEvent(r.Context(), id, "phase_changed", map[string]any{"phase": "cancelled", "by": userOrDefault(r)})
-	a.store.Audit(r.Context(), inv.TenantID, userOrDefault(r), "investigation_cancel", "investigation", id, "ok", nil, nil)
+	actor := "system"
+	if p, ok := auth.FromContext(r.Context()); ok {
+		actor = p.Subject
+	}
+	_, _ = a.store.AppendEvent(r.Context(), id, "phase_changed", map[string]any{"phase": "cancelled", "by": actor})
+	a.store.Audit(r.Context(), inv.TenantID, actor, "investigation_cancel", "investigation", id, "ok", nil, nil)
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
@@ -115,13 +125,18 @@ func (a *PublicAPI) postFeedback(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &body) {
 		return
 	}
-	if body.Author == "" {
-		body.Author = userOrDefault(r)
+	if p, ok := auth.FromContext(r.Context()); ok {
+		body.Author = p.Subject // 反馈作者以认证身份为准,不信任 body
 	}
 	inv, err := a.store.GetInvestigation(r.Context(), id)
 	if err != nil {
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
 		return
+	}
+	if inc, e := a.store.GetIncident(r.Context(), inv.IncidentID); e == nil {
+		if !a.authorizeIncident(w, r, inc, auth.ActionFeedback) {
+			return
+		}
 	}
 	fb, err := a.store.InsertFeedback(r.Context(), model.Feedback{
 		InvestigationID:    id,
