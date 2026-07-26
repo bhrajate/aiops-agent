@@ -40,6 +40,13 @@ func main() {
 	slog.SetDefault(log)
 	cfg := config.Load()
 
+	// 启动配置校验(SECURITY §1/§2/§4):生产模式下弱/缺失安全配置直接 fail-fast。
+	if err := cfg.Validate(); err != nil {
+		log.Error("invalid configuration", "err", err)
+		os.Exit(1)
+	}
+	log.Info("configuration validated", "env", cfg.Env, "auth_mode", cfg.AuthMode)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -83,13 +90,18 @@ func main() {
 	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	// ---- 认证器(SECURITY §1)----
-	authn := auth.NewAuthenticator(auth.Config{
+	authCfg := auth.Config{
 		Mode:     auth.Mode(cfg.AuthMode),
 		HS256Key: cfg.HS256Secret,
 		Issuer:   cfg.Issuer,
 		Audience: cfg.Audience,
-		// OIDC verifier 生产接入(JWKS);此处 hs256/disabled 无需
-	})
+	}
+	if cfg.AuthMode == "oidc" {
+		// 装配真实 JWKS verifier(此前为空壳)
+		authCfg.OIDCVerif = auth.NewJWKSVerifier(cfg.OIDCJWKSURL, cfg.OIDCIssuer, cfg.OIDCAudience)
+		log.Info("oidc auth enabled", "issuer", cfg.OIDCIssuer, "jwks", cfg.OIDCJWKSURL)
+	}
+	authn := auth.NewAuthenticator(authCfg)
 	if cfg.AuthMode == "disabled" {
 		log.Warn("AUTH DISABLED — 仅限本地测试,切勿用于生产")
 	}
@@ -127,9 +139,9 @@ func main() {
 
 	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
 	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, log)
-	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, metrics.Handler(), log)
+	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, cfg.IsProduction(), metrics.Handler(), log)
 
-	outboxPub := outbox.New(st, publisher, log)
+	outboxPub := outbox.New(st, publisher, cfg.MaxDeliveryAttempts, log)
 
 	var wg sync.WaitGroup
 

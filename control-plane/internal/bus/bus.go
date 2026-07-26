@@ -73,9 +73,14 @@ func (c *Consumer) Run(ctx context.Context, h Handler) error {
 	return c.RunWithOptions(ctx, h, RunOptions{})
 }
 
-// RunWithOptions 支持重试上限 + 死信队列(SECURITY §7)。
+// RunWithOptions 支持重试上限 + 死信队列(SECURITY §7),保证 at-least-once。
+//
+// 关键语义:kafka-go 的 FetchMessage 只前进不回退。因此对失败消息必须"就地"有界
+// 重试(带退避),而不是 continue 去取下一条——否则失败消息会被静默跳过、DLQ 永不触发。
+// 只有处理成功或已投递 DLQ 后,才提交 offset。
 func (c *Consumer) RunWithOptions(ctx context.Context, h Handler, opts RunOptions) error {
-	attempts := make(map[string]int) // offset 维度的重试计数
+	backoff := 500 * time.Millisecond
+	maxBackoff := 10 * time.Second
 	for {
 		m, err := c.reader.FetchMessage(ctx)
 		if err != nil {
@@ -89,32 +94,66 @@ func (c *Consumer) RunWithOptions(ctx context.Context, h Handler, opts RunOption
 				continue
 			}
 		}
-		offKey := offsetKey(m.Partition, m.Offset)
-		if herr := h(ctx, m.Key, m.Value); herr != nil {
-			attempts[offKey]++
-			if opts.MaxAttempts > 0 && attempts[offKey] >= opts.MaxAttempts {
-				// 超限:投 DLQ,然后提交跳过,避免毒消息卡住分区
-				if opts.OnDeadLetter != nil {
-					if dlErr := opts.OnDeadLetter(ctx, opts.Topic, string(m.Key), m.Value, herr, attempts[offKey]); dlErr != nil {
-						// DLQ 也失败:继续重试,不提交
-						time.Sleep(500 * time.Millisecond)
-						continue
+
+		// 就地有界重试同一条消息
+		attempt := 0
+		handled := false
+		for {
+			if herr := h(ctx, m.Key, m.Value); herr == nil {
+				handled = true
+				break
+			} else {
+				attempt++
+				if opts.MaxAttempts > 0 && attempt >= opts.MaxAttempts {
+					// 超上限:投 DLQ。DLQ 成功才提交跳过(避免毒消息卡住分区);
+					// DLQ 失败则不提交,靠外层重新 fetch(offset 未提交)重来。
+					if opts.OnDeadLetter != nil {
+						if dlErr := opts.OnDeadLetter(ctx, opts.Topic, string(m.Key), m.Value, herr, attempt); dlErr != nil {
+							break // 未 handled,不提交
+						}
 					}
+					handled = true // 已 DLQ,可提交跳过
+					break
 				}
-				delete(attempts, offKey)
-				_ = c.reader.CommitMessages(ctx, m)
-				continue
+				// 退避后重试同一条(ctx 可中断)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(backoffFor(attempt, backoff, maxBackoff)):
+				}
 			}
-			time.Sleep(500 * time.Millisecond)
+		}
+
+		if !handled {
+			// DLQ 也失败:不提交,短暂等待后由外层重新处理(至少一次)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
 			continue
 		}
-		delete(attempts, offKey)
 		if err := c.reader.CommitMessages(ctx, m); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 		}
 	}
+}
+
+// backoffFor 指数退避(封顶)。
+func backoffFor(attempt int, base, max time.Duration) time.Duration {
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= max {
+			return max
+		}
+	}
+	if d > max {
+		return max
+	}
+	return d
 }
 
 func offsetKey(partition int, offset int64) string {

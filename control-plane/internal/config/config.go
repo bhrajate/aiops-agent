@@ -7,7 +7,13 @@ import (
 	"strings"
 )
 
+// DefaultHS256Secret 是开发用不安全默认值;生产模式启动校验会拒绝它。
+const DefaultHS256Secret = "dev-insecure-change-me"
+
 type Config struct {
+	// 运行环境:development | production。production 触发严格启动校验。
+	Env string
+
 	// 网络
 	PublicAddr   string // 公共 API,默认 :8080
 	InternalAddr string // 内部 API,默认 :8090
@@ -92,6 +98,7 @@ func Load() Config {
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
 	return Config{
+		Env:              getenv("AIOPS_ENV", "development"),
 		PublicAddr:       getenv("AIOPS_PUBLIC_ADDR", ":8088"),
 		InternalAddr:     getenv("AIOPS_INTERNAL_ADDR", ":8090"),
 		DBDSN:            getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
@@ -105,7 +112,7 @@ func Load() Config {
 		Tenant:           getenv("AIOPS_TENANT", "default"),
 
 		AuthMode:     getenv("AIOPS_AUTH_MODE", "hs256"),
-		HS256Secret:  getenv("AIOPS_AUTH_HS256_SECRET", "dev-insecure-change-me"),
+		HS256Secret:  getenv("AIOPS_AUTH_HS256_SECRET", DefaultHS256Secret),
 		OIDCIssuer:   getenv("AIOPS_OIDC_ISSUER", ""),
 		OIDCJWKSURL:  getenv("AIOPS_OIDC_JWKS_URL", ""),
 		OIDCAudience: getenv("AIOPS_OIDC_AUDIENCE", "aiops"),
@@ -131,4 +138,59 @@ func Load() Config {
 		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),
 	}
+}
+
+// IsProduction 报告是否处于生产模式(触发严格校验)。
+func (c Config) IsProduction() bool {
+	return strings.EqualFold(c.Env, "production") || strings.EqualFold(c.Env, "prod")
+}
+
+// Validate 在启动时检查关键安全配置(SECURITY §1/§2/§4)。
+// 生产模式下,任何弱/缺失的安全配置都直接拒绝启动(fail-fast),
+// 避免"默认密钥 / 空 token / 空 webhook secret 静默启动"。
+func (c Config) Validate() error {
+	var problems []string
+
+	if c.IsProduction() {
+		switch strings.ToLower(c.AuthMode) {
+		case "disabled":
+			problems = append(problems, "AIOPS_AUTH_MODE=disabled 不允许用于生产")
+		case "hs256":
+			if c.HS256Secret == "" || c.HS256Secret == DefaultHS256Secret {
+				problems = append(problems, "生产模式必须设置强随机 AIOPS_AUTH_HS256_SECRET(不能为默认值/空)")
+			}
+			if len(c.HS256Secret) < 32 {
+				problems = append(problems, "AIOPS_AUTH_HS256_SECRET 长度应 >= 32")
+			}
+		case "oidc":
+			if c.OIDCIssuer == "" || c.OIDCJWKSURL == "" {
+				problems = append(problems, "AIOPS_AUTH_MODE=oidc 必须配置 AIOPS_OIDC_ISSUER 与 AIOPS_OIDC_JWKS_URL")
+			}
+		default:
+			problems = append(problems, "AIOPS_AUTH_MODE 必须为 hs256 或 oidc")
+		}
+		if c.InternalToken == "" {
+			problems = append(problems, "生产模式必须设置 AIOPS_INTERNAL_TOKEN(内部 API 共享密钥)")
+		}
+		if c.WebhookSecret == "" {
+			problems = append(problems, "生产模式必须设置 AIOPS_WEBHOOK_SECRET(Signal webhook HMAC 密钥)")
+		}
+		if c.AgentMTLSEnabled {
+			if c.AgentClientCert == "" || c.AgentClientKey == "" || c.AgentCA == "" {
+				problems = append(problems, "启用 mTLS 时必须配置 client cert/key/ca")
+			}
+		}
+	}
+
+	if len(problems) > 0 {
+		return &ValidationError{Problems: problems}
+	}
+	return nil
+}
+
+// ValidationError 聚合启动校验问题。
+type ValidationError struct{ Problems []string }
+
+func (e *ValidationError) Error() string {
+	return "配置校验失败:\n  - " + strings.Join(e.Problems, "\n  - ")
 }

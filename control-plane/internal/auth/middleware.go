@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 )
@@ -34,14 +35,27 @@ func (a *Authenticator) Middleware(skip func(r *http.Request) bool, next http.Ha
 	})
 }
 
-// RequireInternalToken 保护内部 API(SECURITY §2):校验共享密钥头。
-func RequireInternalToken(token string, next http.Handler) http.Handler {
+// RequireInternalToken 保护内部 API(SECURITY §2):恒定时间校验共享密钥头。
+// requireToken=true 时,即使配置的 token 为空也一律拒绝(生产模式,防止误配静默放行)。
+func RequireInternalToken(token string, requireToken bool, next http.Handler) http.Handler {
+	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if token != "" && r.Header.Get("X-Internal-Token") != token {
+		if token == "" {
+			if requireToken {
+				// 生产:未配置 token 视为拒绝(不应发生,启动校验已拦截;此处纵深防御)
+				writeErr(w, http.StatusUnauthorized, "unauthorized", "internal token not configured")
+				return
+			}
+			// 开发:未配置则放行(兼容本地无鉴权联调)
+			next.ServeHTTP(w, r)
+			return
+		}
+		got := []byte(r.Header.Get("X-Internal-Token"))
+		if subtle.ConstantTimeCompare(got, expected) != 1 {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "invalid internal token")
 			return
 		}

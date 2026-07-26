@@ -14,15 +14,16 @@ import (
 
 // InternalAPI 是 AI Worker 唯一的回写入口(保证业务库为单一事实源)。
 type InternalAPI struct {
-	store       *store.Store
-	gateway     *gateway.Gateway
-	token       string // 共享密钥(SECURITY §2)
-	metricsHTTP http.Handler
-	log         *slog.Logger
+	store        *store.Store
+	gateway      *gateway.Gateway
+	token        string // 共享密钥(SECURITY §2)
+	requireToken bool   // 生产模式:token 为空也拒绝
+	metricsHTTP  http.Handler
+	log          *slog.Logger
 }
 
-func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, metricsHTTP http.Handler, log *slog.Logger) *InternalAPI {
-	return &InternalAPI{store: s, gateway: gw, token: token, metricsHTTP: metricsHTTP, log: log}
+func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, requireToken bool, metricsHTTP http.Handler, log *slog.Logger) *InternalAPI {
+	return &InternalAPI{store: s, gateway: gw, token: token, requireToken: requireToken, metricsHTTP: metricsHTTP, log: log}
 }
 
 func (a *InternalAPI) Routes() http.Handler {
@@ -42,7 +43,7 @@ func (a *InternalAPI) Routes() http.Handler {
 	mux.HandleFunc("POST /internal/investigations/{id}/diagnosis", a.setDiagnosis)
 	mux.HandleFunc("POST /internal/investigations/{id}/usage", a.setUsage)
 	// 内部 API 共享密钥保护(仅集群内可达)
-	return auth.RequireInternalToken(a.token, httpx.Logging(a.log, mux))
+	return auth.RequireInternalToken(a.token, a.requireToken, httpx.Logging(a.log, mux))
 }
 
 func (a *InternalAPI) invokeTool(w http.ResponseWriter, r *http.Request) {
