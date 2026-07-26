@@ -15,7 +15,7 @@ export default defineConfig({
     proxy: {
       // 公共 API + SSE 事件流统一走 /v1 代理到 control-plane
       '/v1': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:8088',
         changeOrigin: true,
         // SSE 需要禁用缓冲,保持长连接
         configure: (proxy) => {
