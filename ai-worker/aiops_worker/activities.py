@@ -148,12 +148,13 @@ class UsageInput(BaseModel):
 class InvestigationActivities:
     """Bundles activities so a ModelProvider can be injected at startup."""
 
-    def __init__(self, provider: ModelProvider, http_timeout_sec: float = 15.0):
+    def __init__(self, provider: ModelProvider, http_timeout_sec: float = 15.0, internal_token: str = ""):
         self._provider = provider
         self._timeout = http_timeout_sec
+        self._internal_token = internal_token
 
     def _client(self, base_url: str) -> InternalAPIClient:
-        return InternalAPIClient(base_url, timeout_sec=self._timeout)
+        return InternalAPIClient(base_url, timeout_sec=self._timeout, internal_token=self._internal_token)
 
     # -- context -------------------------------------------------------------
 

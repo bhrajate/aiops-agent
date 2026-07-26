@@ -34,19 +34,21 @@ class ToolDenied(Exception):
 
 
 class InternalAPIClient:
-    def __init__(self, base_url: str, timeout_sec: float = 15.0):
+    def __init__(self, base_url: str, timeout_sec: float = 15.0, internal_token: str = ""):
         self._base = base_url.rstrip("/")
         self._timeout = timeout_sec
+        # 内部 API 共享密钥(SECURITY §2);为空则不发送(开发未启用时兼容)。
+        self._headers = {"X-Internal-Token": internal_token} if internal_token else {}
 
     async def _post(self, path: str, json_body: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.post(self._base + path, json=json_body)
+            resp = await client.post(self._base + path, json=json_body, headers=self._headers)
             resp.raise_for_status()
             return resp.json() if resp.content else {}
 
     async def _get(self, path: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.get(self._base + path)
+            resp = await client.get(self._base + path, headers=self._headers)
             resp.raise_for_status()
             return resp.json()
 

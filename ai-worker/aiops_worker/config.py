@@ -32,6 +32,9 @@ class Settings:
     # Analyzer concurrency ceiling (architecture doc 8.4).
     max_analyzer_concurrency: int = int(os.environ.get("AIOPS_MAX_ANALYZER_CONCURRENCY", "3"))
 
+    # Internal API shared secret (SECURITY §2). Sent as X-Internal-Token.
+    internal_token: str = os.environ.get("AIOPS_INTERNAL_TOKEN", "")
+
     # Observability (architecture §16): OTLP endpoint (host:port). Empty = disabled.
     otlp_endpoint: str = os.environ.get("AIOPS_OTLP_ENDPOINT", "")
     service_name: str = os.environ.get("AIOPS_SERVICE_NAME", "aiops-ai-worker")

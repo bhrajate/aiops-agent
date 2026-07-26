@@ -39,7 +39,11 @@ async def run_worker() -> None:
         data_converter=pydantic_data_converter,
     )
 
-    acts = InvestigationActivities(provider, http_timeout_sec=settings.http_timeout_sec)
+    acts = InvestigationActivities(
+        provider,
+        http_timeout_sec=settings.http_timeout_sec,
+        internal_token=settings.internal_token,
+    )
     interceptors = build_interceptors(settings.otlp_endpoint, settings.service_name)
     worker = Worker(
         client,
