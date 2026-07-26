@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiUrl } from '@/api/client'
+import { apiUrl, withTokenQuery } from '@/api/client'
 import type { InvestigationEvent } from '@/api/types'
 
 export type SSEStatus = 'idle' | 'connecting' | 'open' | 'closed' | 'error'
@@ -29,8 +29,11 @@ export function useSSE(
       return
     }
 
+    // EventSource 无法设置 Authorization 头,token 以查询串携带(后端支持时生效)。
     const url = apiUrl(
-      `/v1/investigations/${encodeURIComponent(investigationId)}/events`,
+      withTokenQuery(
+        `/v1/investigations/${encodeURIComponent(investigationId)}/events`,
+      ),
     )
     setStatus('connecting')
 

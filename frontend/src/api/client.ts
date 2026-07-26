@@ -1,11 +1,25 @@
 // 轻量 fetch 封装。默认使用相对路径 /v1(经 Vite dev proxy 转发到 :8088),
 // 也可通过 VITE_API_BASE 指向独立网关。
+import {
+  getToken,
+  clearSession,
+  emitUnauthorized,
+  emitForbidden,
+} from '@/auth/store'
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '')
 
 export function apiUrl(path: string): string {
   // path 形如 /v1/incidents
   return `${API_BASE}${path}`
+}
+
+// 附带当前 token 的查询串(用于 EventSource 等无法设置请求头的场景)。
+export function withTokenQuery(path: string): string {
+  const token = getToken()
+  if (!token) return path
+  const sep = path.includes('?') ? '&' : '?'
+  return `${path}${sep}access_token=${encodeURIComponent(token)}`
 }
 
 export class HttpError extends Error {
@@ -39,17 +53,21 @@ interface RequestOptions {
   body?: unknown
   headers?: Record<string, string>
   signal?: AbortSignal
+  // 跳过全局 401 处理(用于登录端点:401 表示凭证错误,不应触发跳转/清理)
+  skipAuthRedirect?: boolean
 }
 
 export async function request<T>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<T> {
-  const { method = 'GET', body, headers = {}, signal } = opts
+  const { method = 'GET', body, headers = {}, signal, skipAuthRedirect } = opts
+  const token = getToken()
   const res = await fetch(apiUrl(path), {
     method,
     headers: {
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -57,7 +75,17 @@ export async function request<T>(
   })
 
   if (!res.ok) {
-    throw await parseError(res)
+    const err = await parseError(res)
+    // 401:令牌缺失/失效 → 清 token 并通知上层跳转登录
+    if (res.status === 401 && !skipAuthRedirect) {
+      clearSession()
+      emitUnauthorized()
+    }
+    // 403:已登录但权限不足 → 提示,不跳登录
+    if (res.status === 403) {
+      emitForbidden(err.message)
+    }
+    throw err
   }
 
   // 204 或空响应体

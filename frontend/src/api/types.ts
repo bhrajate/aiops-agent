@@ -225,3 +225,25 @@ export interface SignalRequest {
 export interface ApiError {
   error: { code: string; message: string }
 }
+
+// ── 认证(SECURITY.md §1)────────────────────────────────
+// JWT claims 最小集;namespaces 含 '*' 表示全部命名空间。
+export interface UserClaims {
+  sub: string
+  email?: string
+  roles: string[]
+  clusters?: string[]
+  namespaces?: string[]
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+// POST /v1/auth/login 响应
+export interface LoginResponse {
+  token: string
+  expires_in: number
+  user: UserClaims
+}

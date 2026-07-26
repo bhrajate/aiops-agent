@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { FeedbackAction, InvestigationPhase } from '@/api/types'
 import { Button } from './ui'
 import { useSendFeedback, useCancelInvestigation } from '@/hooks/queries'
+import { useAuth } from '@/auth/context'
 import { HttpError } from '@/api/client'
 import { CheckCircle2, Edit3, XCircle, Ban } from 'lucide-react'
 
@@ -29,9 +30,12 @@ export function FeedbackControls({
 
   const feedback = useSendFeedback(investigationId)
   const cancel = useCancelInvestigation(investigationId)
+  const { canWrite } = useAuth()
 
   const isActive = ACTIVE_PHASES.includes(phase)
   const isClosed = phase === 'closed' || phase === 'cancelled'
+  // 只读角色(viewer)禁用所有写操作(后端已强制,前端体验优化)
+  const disabledWrite = isClosed || !canWrite
 
   async function submit(action: FeedbackAction) {
     setMsg(null)
@@ -104,7 +108,7 @@ export function FeedbackControls({
         <Button
           variant="primary"
           loading={feedback.isPending}
-          disabled={isClosed}
+          disabled={disabledWrite}
           onClick={() => submit('confirm')}
         >
           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -115,7 +119,7 @@ export function FeedbackControls({
           <Button
             variant="secondary"
             loading={feedback.isPending}
-            disabled={isClosed || !rootCause}
+            disabled={disabledWrite || !rootCause}
             onClick={() => submit('correct')}
           >
             <Edit3 className="h-3.5 w-3.5" />
@@ -124,7 +128,7 @@ export function FeedbackControls({
         ) : (
           <Button
             variant="secondary"
-            disabled={isClosed}
+            disabled={disabledWrite}
             onClick={() => setCorrecting(true)}
           >
             <Edit3 className="h-3.5 w-3.5" />
@@ -135,14 +139,14 @@ export function FeedbackControls({
         <Button
           variant="secondary"
           loading={feedback.isPending}
-          disabled={isClosed}
+          disabled={disabledWrite}
           onClick={() => submit('close')}
         >
           <XCircle className="h-3.5 w-3.5" />
           关闭
         </Button>
 
-        {isActive && (
+        {isActive && canWrite && (
           <Button
             variant="danger"
             loading={cancel.isPending}
@@ -153,6 +157,12 @@ export function FeedbackControls({
           </Button>
         )}
       </div>
+
+      {!canWrite && (
+        <p className="text-xs text-amber-300/80">
+          当前角色为只读(viewer),写操作已禁用。
+        </p>
+      )}
 
       {msg && <p className="text-xs text-slate-400">{msg}</p>}
     </div>

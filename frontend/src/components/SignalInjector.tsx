@@ -53,7 +53,13 @@ export function SignalInjector({ onClose }: { onClose: () => void }) {
       await inject.mutateAsync({ ...form, starts_at: new Date().toISOString() })
       setMsg('已注入 Signal,稍候刷新 Incident 列表')
     } catch (e) {
-      setMsg(e instanceof HttpError ? `失败:${e.message}` : '注入失败')
+      if (e instanceof HttpError && e.status === 401) {
+        setMsg(
+          '注入需 webhook 签名:请将后端 AIOPS_WEBHOOK_SECRET 置空后重试(演示模式放行)。',
+        )
+      } else {
+        setMsg(e instanceof HttpError ? `失败:${e.message}` : '注入失败')
+      }
     }
   }
 
@@ -78,6 +84,11 @@ export function SignalInjector({ onClose }: { onClose: () => void }) {
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        <p className="border-b border-surface-700 bg-amber-500/5 px-4 py-2 text-[11px] leading-relaxed text-amber-300/80">
+          演示注入需后端将 AIOPS_WEBHOOK_SECRET 配置为空时可用(webhook HMAC
+          签名鉴权,非用户登录令牌)。配置了 secret 时此处会返回 401。
+        </p>
 
         <div className="grid grid-cols-2 gap-3 p-4">
           <label className="col-span-1 text-xs text-slate-400">

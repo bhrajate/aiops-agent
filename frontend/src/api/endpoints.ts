@@ -108,6 +108,12 @@ export function getEvidence(evidenceId: string): Promise<Evidence> {
   )
 }
 
+// /v1/signals 用 webhook HMAC 签名鉴权而非用户 JWT(SECURITY.md §4)。
+// 演示环境缺签名可能返回 401,此处跳过全局登录跳转,由 UI 友好提示。
 export function postSignal(payload: SignalRequest): Promise<unknown> {
-  return request<unknown>('/v1/signals', { method: 'POST', body: payload })
+  return request<unknown>('/v1/signals', {
+    method: 'POST',
+    body: payload,
+    skipAuthRedirect: true,
+  })
 }

@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useIncident, useStartInvestigation } from '@/hooks/queries'
+import { useAuth } from '@/auth/context'
 import { SeverityBadge, StatusBadge } from '@/components/Badges'
 import { Card, CardHeader, Spinner, ErrorState, Button } from '@/components/ui'
 import { formatTime, formatBlastRadius } from '@/lib/format'
@@ -43,6 +44,7 @@ export function IncidentDetailPage() {
   const navigate = useNavigate()
   const { data: inc, isLoading, error, refetch } = useIncident(incidentId)
   const start = useStartInvestigation()
+  const { canWrite } = useAuth()
 
   const investigationIds = useMemo(
     () => (inc ? resolveInvestigationIds(inc) : []),
@@ -105,10 +107,25 @@ export function IncidentDetailPage() {
             {inc.incident_id} · 版本 v{inc.version}
           </p>
         </div>
-        <Button variant="primary" loading={start.isPending} onClick={handleStart}>
-          <Play className="h-3.5 w-3.5" />
-          发起调查
-        </Button>
+        {canWrite ? (
+          <Button
+            variant="primary"
+            loading={start.isPending}
+            onClick={handleStart}
+          >
+            <Play className="h-3.5 w-3.5" />
+            发起调查
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            disabled
+            title="当前角色为只读(viewer),无权发起调查"
+          >
+            <Play className="h-3.5 w-3.5" />
+            发起调查
+          </Button>
+        )}
       </div>
 
       {start.error && (
