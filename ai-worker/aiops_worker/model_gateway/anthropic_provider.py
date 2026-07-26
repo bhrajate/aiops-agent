@@ -83,9 +83,18 @@ class AnthropicProvider(ModelProvider):
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", "") == "text"
-        )
+        # Defensive extraction: a malformed SDK object (e.g. content=None) must
+        # not throw past _complete_validated's recovery path -> treat as empty
+        # text, which _parse turns into a clean error and the repair/fallback runs.
+        content = getattr(resp, "content", None) or []
+        try:
+            text = "".join(
+                getattr(block, "text", "")
+                for block in content
+                if getattr(block, "type", "") == "text"
+            )
+        except TypeError:
+            text = ""
         truncated = getattr(resp, "stop_reason", None) == "max_tokens"
         usage = ModelUsage(
             provider="anthropic",

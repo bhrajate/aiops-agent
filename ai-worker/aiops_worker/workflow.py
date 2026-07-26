@@ -53,6 +53,11 @@ with workflow.unsafe.imports_passed_through():
 _MODEL_TIMEOUT = timedelta(seconds=90)
 _IO_TIMEOUT = timedelta(seconds=30)
 _RETRY = RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=1))
+# Wall-clock safety net for the human-feedback wait: a WaitingFeedback
+# investigation must not block forever. On timeout it auto-closes (the business
+# DB remains the source of truth; humans can reopen). Complements the
+# recommended Temporal run_timeout set by the control plane at start.
+_FEEDBACK_TIMEOUT = timedelta(hours=48)
 
 
 def _clip_analyzers_to_budget(
@@ -367,24 +372,34 @@ class InvestigationWorkflow:
     ) -> tuple[list[Evidence], list]:
         scope = {"cluster_id": inp.cluster_id, "tenant_id": inp.tenant_id}
 
-        # Reference knowledge (runbooks) first -- data only, never proof.
-        if plan.runbook_queries:
-            await workflow.execute_activity_method(
+        all_evidence: list[Evidence] = []
+
+        # Reference knowledge (runbooks) first -- data only, never proof. Runbook
+        # lookups are tool calls too: clip them to the remaining budget and count
+        # them, so they cannot be used to bypass max_tool_calls (architecture 8.4).
+        runbook_budget = max(0, budget.max_tool_calls - self._usage.tool_calls)
+        runbook_queries = plan.runbook_queries[:runbook_budget]
+        if runbook_queries:
+            runbook_ev = await workflow.execute_activity_method(
                 InvestigationActivities.retrieve_runbooks,
                 RunbookInput(
                     investigation_id=inp.investigation_id,
                     incident_id=inp.incident_id,
                     control_internal_url=inp.control_internal_url,
-                    queries=plan.runbook_queries,
+                    queries=runbook_queries,
                 ),
                 start_to_close_timeout=_IO_TIMEOUT,
                 retry_policy=_RETRY,
             )
+            # Reference knowledge feeds the reasoning as data (architecture 12.2):
+            # merge into evidence (type=knowledge) instead of discarding it.
+            all_evidence.extend(runbook_ev)
+            self._usage.tool_calls += len(runbook_queries)
 
         # Pre-emptive guardrail (architecture 8.4): clip this round's analyzers +
-        # per-analyzer tools to the tool-call budget BEFORE dispatching anything,
-        # so a single round cannot blow past max_tool_calls. Deterministic --
-        # depends only on the current usage and the (deterministic) plan order.
+        # per-analyzer tools to the *remaining* tool-call budget BEFORE dispatching
+        # anything, so a single round cannot blow past max_tool_calls. Deterministic
+        # -- depends only on the current usage and the (deterministic) plan order.
         specs = _clip_analyzers_to_budget(
             plan.analyzers, remaining=budget.max_tool_calls - self._usage.tool_calls
         )
@@ -411,7 +426,6 @@ class InvestigationWorkflow:
         ]
         results: list[RunAnalyzerOutput] = list(await asyncio.gather(*futures))
 
-        all_evidence: list[Evidence] = []
         analyzer_results = []
         for out in results:
             all_evidence.extend(out.evidences)
@@ -472,12 +486,21 @@ class InvestigationWorkflow:
     ) -> WorkflowResult:
         await self._transition(inp, Phase.WAITING_FEEDBACK, "waiting_feedback")
 
-        # Block until human feedback / cancel / incident resolved.
-        await workflow.wait_condition(
-            lambda: self._feedback is not None or self._should_cancel()
-        )
+        # Block until human feedback / cancel / incident resolved, but never
+        # forever: a bounded wait auto-closes on timeout (wall-clock safety net).
+        timed_out = False
+        try:
+            await workflow.wait_condition(
+                lambda: self._feedback is not None or self._should_cancel(),
+                timeout=_FEEDBACK_TIMEOUT,
+            )
+        except TimeoutError:
+            timed_out = True
 
-        if self._feedback is not None:
+        if timed_out:
+            await self._emit(inp, "feedback_timeout", {"after": str(_FEEDBACK_TIMEOUT)})
+            final = Phase.CLOSED
+        elif self._feedback is not None:
             action = str(self._feedback.get("action", "close"))
             await self._emit(inp, "human_feedback", self._feedback)
             if action in {"cancel", "reject"}:

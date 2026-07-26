@@ -44,6 +44,8 @@ class _FakeClient:
     async def invoke_tool(self, investigation_id, incident_id, tool, arguments, scope=None):
         from aiops_worker.contracts import Evidence
 
+        self.tool_calls_seen = getattr(self, "tool_calls_seen", [])
+        self.tool_calls_seen.append(tool)
         etype = {
             "query_metrics": "metric",
             "search_logs": "log",
@@ -170,6 +172,20 @@ async def test_workflow_end_to_end_reaches_closed():
     # Guardrail respected: never exceeded the tool-call budget.
     assert result.usage.tool_calls <= Budget().max_tool_calls
     assert history is not None
+
+
+@pytest.mark.asyncio
+async def test_runbook_queries_counted_in_budget():
+    # 当预算极小(max_tool_calls=1)时,runbook 检索现在也计入并受裁剪:
+    # 总工具调用(含 runbook)不得超过预算。回归 round-2 审查发现的预算旁路。
+    env = await _start_env()
+    try:
+        _history, _wf_id, result = await _run_once(
+            env, Budget(max_tool_calls=1, max_rounds=1)
+        )
+    finally:
+        await env.shutdown()
+    assert result.usage.tool_calls <= 1
 
 
 @pytest.mark.asyncio
