@@ -11,6 +11,12 @@
 *.pem
 *.key
 
+# ---- Generated mTLS certs (deploy/certs/gen-certs.sh 产物;仅提交脚本) ----
+/deploy/certs/*.crt
+/deploy/certs/*.key
+/deploy/certs/*.srl
+/deploy/certs/*.csr
+
 # ---- Go ----
 /control-plane/bin/
 /cluster-agent/bin/
