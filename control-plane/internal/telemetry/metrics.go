@@ -1,0 +1,87 @@
+// Package telemetry 提供 Prometheus 指标与 OpenTelemetry 追踪(架构第 16 节)。
+package telemetry
+
+import (
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// Metrics 汇集控制面核心指标(架构第 16 节)。
+type Metrics struct {
+	SignalsIngested       *prometheus.CounterVec // by source
+	IncidentsCreated      *prometheus.CounterVec // by severity, fault_category
+	InvestigationsStarted prometheus.Counter
+	ToolInvokes           *prometheus.CounterVec   // by tool, result
+	ToolLatency           *prometheus.HistogramVec // by tool
+	DeadLetters           *prometheus.CounterVec   // by topic
+	AuthDenials           *prometheus.CounterVec   // by reason
+	reg                   *prometheus.Registry
+}
+
+// New 创建并注册指标。
+func New() *Metrics {
+	reg := prometheus.NewRegistry()
+	m := &Metrics{
+		SignalsIngested: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_signals_ingested_total", Help: "Signals accepted by ingress"}, []string{"source"}),
+		IncidentsCreated: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_incidents_created_total", Help: "Incidents created"}, []string{"severity", "fault_category"}),
+		InvestigationsStarted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "aiops_investigations_started_total", Help: "Investigations started"}),
+		ToolInvokes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_tool_invocations_total", Help: "Tool Gateway invocations"}, []string{"tool", "result"}),
+		ToolLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "aiops_tool_latency_seconds", Help: "Tool invocation latency",
+			Buckets: prometheus.DefBuckets}, []string{"tool"}),
+		DeadLetters: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_dead_letters_total", Help: "Messages dead-lettered"}, []string{"topic"}),
+		AuthDenials: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_auth_denials_total", Help: "Authz denials"}, []string{"reason"}),
+		reg: reg,
+	}
+	reg.MustRegister(m.SignalsIngested, m.IncidentsCreated, m.InvestigationsStarted,
+		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials)
+	// Go runtime + process 指标
+	reg.MustRegister(prometheus.NewGoCollector())
+	return m
+}
+
+// Handler 返回 /metrics 处理器。
+func (m *Metrics) Handler() http.Handler {
+	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{})
+}
+
+// Nil-safe 包装:Metrics 为 nil 时各方法空操作,便于降级。
+func (m *Metrics) IncSignal(source string) {
+	if m != nil {
+		m.SignalsIngested.WithLabelValues(source).Inc()
+	}
+}
+func (m *Metrics) IncIncident(severity, category string) {
+	if m != nil {
+		m.IncidentsCreated.WithLabelValues(severity, category).Inc()
+	}
+}
+func (m *Metrics) IncInvestigation() {
+	if m != nil {
+		m.InvestigationsStarted.Inc()
+	}
+}
+func (m *Metrics) ObserveTool(tool, result string, seconds float64) {
+	if m != nil {
+		m.ToolInvokes.WithLabelValues(tool, result).Inc()
+		m.ToolLatency.WithLabelValues(tool).Observe(seconds)
+	}
+}
+func (m *Metrics) IncDeadLetter(topic string) {
+	if m != nil {
+		m.DeadLetters.WithLabelValues(topic).Inc()
+	}
+}
+func (m *Metrics) IncAuthDenial(reason string) {
+	if m != nil {
+		m.AuthDenials.WithLabelValues(reason).Inc()
+	}
+}

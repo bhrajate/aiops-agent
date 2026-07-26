@@ -14,14 +14,15 @@ import (
 
 // InternalAPI 是 AI Worker 唯一的回写入口(保证业务库为单一事实源)。
 type InternalAPI struct {
-	store   *store.Store
-	gateway *gateway.Gateway
-	token   string // 共享密钥(SECURITY §2)
-	log     *slog.Logger
+	store       *store.Store
+	gateway     *gateway.Gateway
+	token       string // 共享密钥(SECURITY §2)
+	metricsHTTP http.Handler
+	log         *slog.Logger
 }
 
-func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, log *slog.Logger) *InternalAPI {
-	return &InternalAPI{store: s, gateway: gw, token: token, log: log}
+func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, metricsHTTP http.Handler, log *slog.Logger) *InternalAPI {
+	return &InternalAPI{store: s, gateway: gw, token: token, metricsHTTP: metricsHTTP, log: log}
 }
 
 func (a *InternalAPI) Routes() http.Handler {
@@ -29,6 +30,10 @@ func (a *InternalAPI) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	// Prometheus 指标(架构第 16 节)。放在 token 校验之外,供采集器抓取。
+	if a.metricsHTTP != nil {
+		mux.Handle("GET /metrics", a.metricsHTTP)
+	}
 	mux.HandleFunc("POST /internal/tools/invoke", a.invokeTool)
 	mux.HandleFunc("GET /internal/investigations/{id}/context", a.getContext)
 	mux.HandleFunc("POST /internal/investigations/{id}/phase", a.setPhase)

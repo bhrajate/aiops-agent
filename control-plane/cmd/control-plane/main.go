@@ -30,6 +30,7 @@ import (
 	"github.com/aiops/control-plane/internal/objstore"
 	"github.com/aiops/control-plane/internal/outbox"
 	"github.com/aiops/control-plane/internal/store"
+	"github.com/aiops/control-plane/internal/telemetry"
 	"github.com/aiops/control-plane/internal/temporalx"
 	"github.com/aiops/control-plane/internal/trigger"
 )
@@ -70,6 +71,17 @@ func main() {
 	publisher := bus.NewPublisher(cfg.KafkaBrokers)
 	defer publisher.Close()
 
+	// ---- 可观测性(架构第 16 节)----
+	metrics := telemetry.New()
+	shutdownTracing, terr2 := telemetry.InitTracing(ctx, cfg.ServiceName, cfg.OTLPEndpoint)
+	if terr2 != nil {
+		log.Warn("tracing init failed (continuing without export)", "err", terr2)
+		shutdownTracing = func(context.Context) error { return nil }
+	} else if cfg.OTLPEndpoint != "" {
+		log.Info("otlp tracing enabled", "endpoint", cfg.OTLPEndpoint)
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
+
 	// ---- 认证器(SECURITY §1)----
 	authn := auth.NewAuthenticator(auth.Config{
 		Mode:     auth.Mode(cfg.AuthMode),
@@ -108,14 +120,14 @@ func main() {
 	}
 
 	// ---- 组件装配 ----
-	gw := gateway.New(st, agent, rawStore, log)
+	gw := gateway.New(st, agent, rawStore, metrics, log)
 	mgr := incident.New(st, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant, log)
-	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, log)
+	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, metrics, log)
 
 	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
 	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, log)
-	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, log)
+	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, metrics.Handler(), log)
 
 	outboxPub := outbox.New(st, publisher, log)
 
@@ -136,6 +148,7 @@ func main() {
 		}
 		st.Audit(ctx, cfg.Tenant, "system", "dead_letter", topic, key, "error", nil,
 			map[string]any{"attempts": attempts, "error": errMsg})
+		metrics.IncDeadLetter(topic)
 		log.Warn("message dead-lettered", "topic", topic, "key", key, "attempts", attempts, "err", errMsg)
 		return nil
 	}

@@ -55,6 +55,10 @@ type Config struct {
 
 	// 可靠性
 	MaxDeliveryAttempts int
+
+	// 可观测性(架构第 16 节)
+	ServiceName  string
+	OTLPEndpoint string // 为空则不导出 trace(仍可埋点)
 }
 
 func getenv(key, def string) string {
@@ -123,5 +127,8 @@ func Load() Config {
 		S3UseSSL:    getbool("AIOPS_S3_USE_SSL", false),
 
 		MaxDeliveryAttempts: getint("AIOPS_MAX_DELIVERY_ATTEMPTS", 5),
+
+		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
+		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),
 	}
 }

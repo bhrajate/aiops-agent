@@ -47,15 +47,27 @@ type RawSnapshotStore interface {
 	PutJSON(ctx context.Context, key string, data []byte) (string, error)
 }
 
-type Gateway struct {
-	store *store.Store
-	agent *agentclient.Client
-	obj   RawSnapshotStore // 可为 nil(降级:仅存摘要)
-	log   *slog.Logger
+// ToolMetrics 抽象工具指标记录(nil-safe;避免 gateway 直接依赖 telemetry 包）。
+type ToolMetrics interface {
+	ObserveTool(tool, result string, seconds float64)
 }
 
-func New(s *store.Store, agent *agentclient.Client, obj RawSnapshotStore, log *slog.Logger) *Gateway {
-	return &Gateway{store: s, agent: agent, obj: obj, log: log}
+type Gateway struct {
+	store   *store.Store
+	agent   *agentclient.Client
+	obj     RawSnapshotStore // 可为 nil(降级:仅存摘要)
+	metrics ToolMetrics      // 可为 nil
+	log     *slog.Logger
+}
+
+func New(s *store.Store, agent *agentclient.Client, obj RawSnapshotStore, metrics ToolMetrics, log *slog.Logger) *Gateway {
+	return &Gateway{store: s, agent: agent, obj: obj, metrics: metrics, log: log}
+}
+
+func (g *Gateway) observeTool(tool, result string, seconds float64) {
+	if g.metrics != nil {
+		g.metrics.ObserveTool(tool, result, seconds)
+	}
 }
 
 // InvokeRequest 来自 AI Worker 的工具调用请求。
@@ -113,11 +125,13 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 	res, err := g.agent.Invoke(ctx, req.Tool, req.Arguments, scope)
 	elapsed := time.Since(start)
 	if err != nil {
+		g.observeTool(req.Tool, "error", elapsed.Seconds())
 		g.store.Audit(ctx, tenant, "cluster-agent", "tool_invoke", "investigation", req.InvestigationID, "error",
 			map[string]any{"cluster": scope.ClusterID, "namespace": scope.Namespace},
 			map[string]any{"tool": req.Tool, "err": err.Error()})
 		return InvokeResult{}, fmt.Errorf("tool %s failed: %w", req.Tool, err)
 	}
+	g.observeTool(req.Tool, "ok", elapsed.Seconds())
 
 	// 6) 脱敏(对 summary 与 raw 做敏感信息擦除)
 	redacted := false

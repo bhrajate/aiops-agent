@@ -37,7 +37,7 @@ func (a *Authenticator) Middleware(skip func(r *http.Request) bool, next http.Ha
 // RequireInternalToken 保护内部 API(SECURITY §2):校验共享密钥头。
 func RequireInternalToken(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}

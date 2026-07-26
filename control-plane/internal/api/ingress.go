@@ -17,16 +17,20 @@ import (
 
 // Ingress 是 Signal Ingress(文档 6.1):鉴权、快速 2xx、标准化、持久化+outbox。
 // Webhook 是信号入口,不是 RCA 触发器 —— 这里绝不等待模型或调查。
+// SignalMetrics nil-safe 信号计数。
+type SignalMetrics interface{ IncSignal(source string) }
+
 type Ingress struct {
 	store         *store.Store
 	clusterID     string
 	tenant        string
 	webhookSecret string
+	metrics       SignalMetrics
 	log           *slog.Logger
 }
 
-func NewIngress(s *store.Store, clusterID, tenant, webhookSecret string, log *slog.Logger) *Ingress {
-	return &Ingress{store: s, clusterID: clusterID, tenant: tenant, webhookSecret: webhookSecret, log: log}
+func NewIngress(s *store.Store, clusterID, tenant, webhookSecret string, metrics SignalMetrics, log *slog.Logger) *Ingress {
+	return &Ingress{store: s, clusterID: clusterID, tenant: tenant, webhookSecret: webhookSecret, metrics: metrics, log: log}
 }
 
 // PostSignal 接收信号。支持两种载荷:
@@ -73,6 +77,9 @@ func (i *Ingress) PostSignal(w http.ResponseWriter, r *http.Request) {
 		if err := i.store.InsertSignalWithOutbox(r.Context(), sig); err != nil {
 			i.log.Warn("persist signal failed", "signal_id", sig.SignalID, "err", err)
 			continue
+		}
+		if i.metrics != nil {
+			i.metrics.IncSignal(sig.Source)
 		}
 		accepted++
 	}
