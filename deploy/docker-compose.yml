@@ -1,0 +1,167 @@
+# =============================================================================
+# AIOps Agent — 本地/开发基础设施
+# 对应架构文档第 13 节(存储设计)。
+#   postgres  : 业务库(PostgreSQL + pgvector),事实源
+#   temporal  : 持久化工作流引擎(自带独立 PostgreSQL,与业务库隔离)
+#   redpanda  : Kafka 兼容事件总线(signals / incidents / investigations)
+#   minio     : S3 兼容对象存储(证据快照 / 报告)
+#   redis     : 限流 / 缓存(可选,不承载不可丢失状态)
+# =============================================================================
+name: aiops
+
+services:
+  # ---------------------------------------------------------------- 业务库
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aiops-postgres
+    environment:
+      POSTGRES_USER: aiops
+      POSTGRES_PASSWORD: aiops
+      POSTGRES_DB: aiops
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.data/postgres:/var/lib/postgresql/data
+      - ../shared/sql:/docker-entrypoint-initdb.d:ro   # 首次启动自动执行 001_schema / 002_seed
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Temporal 专用库
+  temporal-postgres:
+    image: postgres:16
+    container_name: aiops-temporal-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - ./.data/temporal-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- Temporal Server
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    container_name: aiops-temporal
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgres
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    container_name: aiops-temporal-ui
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8233:8080"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- 事件总线
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: aiops-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:19092
+      - --mode=dev-container
+    ports:
+      - "19092:19092"
+    volumes:
+      - ./.data/redpanda:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # 自动创建 topics
+  redpanda-init:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: aiops-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rpk topic create signals incidents investigations \
+          --brokers redpanda:29092 -p 1 -r 1 || true
+    restart: "no"
+
+  # ---------------------------------------------------------------- 对象存储
+  minio:
+    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+    container_name: aiops-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./.data/minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-09-16T17-43-14Z
+    container_name: aiops-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/aiops-evidence &&
+        echo "bucket ready"
+    restart: "no"
+
+  # ---------------------------------------------------------------- 缓存(可选)
+  redis:
+    image: redis:7-alpine
+    container_name: aiops-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
