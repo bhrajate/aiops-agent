@@ -1,0 +1,38 @@
+# ---- OS / Editor ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.log
+
+# ---- Secrets / env ----
+.env
+.env.local
+*.pem
+*.key
+
+# ---- Go ----
+/control-plane/bin/
+/cluster-agent/bin/
+*.test
+*.out
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# ---- Node / Frontend ----
+node_modules/
+/frontend/dist/
+/frontend/.vite/
+
+# ---- Data volumes (local docker) ----
+/deploy/.data/
