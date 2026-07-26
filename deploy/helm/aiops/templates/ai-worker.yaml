@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: ai-worker
+    app.kubernetes.io/component: ai-worker
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.aiWorker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-worker
+        app.kubernetes.io/component: ai-worker
+        app.kubernetes.io/part-of: aiops
+    spec:
+      serviceAccountName: ai-worker
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "aiops.antiAffinity" (list "ai-worker" .) | nindent 6 }}
+      containers:
+        - name: ai-worker
+          image: {{ include "aiops.image" (list .Values.aiWorker . "ai-worker") | quote }}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: {{ include "aiops.secretName" . }}
+          # 无入站端口:进程存在性作探针。
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "grep -qa aiops_worker /proc/*/cmdline"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "grep -qa aiops_worker /proc/*/cmdline"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.aiWorker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,43 @@
+# 开发/演示覆盖:单副本、hs256 本地签发、mock 模型、mTLS 关闭、明文 Secret。
+global:
+  imageTag: "dev"
+
+config:
+  clusterId: "dev-1"
+  authMode: "hs256"
+  modelProvider: "mock"
+  # 开发直接指向集群内(或端口转发的)基础设施。
+  kafkaBrokers: "redpanda.aiops.svc.cluster.local:9092"
+  temporalHostPort: "temporal.aiops.svc.cluster.local:7233"
+  s3Endpoint: "http://minio.aiops.svc.cluster.local:9000"
+
+secrets:
+  create: true
+  data:
+    dbDsn: "postgres://aiops:aiops@postgres.aiops.svc.cluster.local:5432/aiops?sslmode=disable"
+    internalToken: "dev-internal-token"
+    webhookSecret: ""
+    authHs256Secret: "dev-secret-change-me"
+    s3AccessKey: "minioadmin"
+    s3SecretKey: "minioadmin"
+    anthropicApiKey: ""
+
+mtls:
+  enabled: false      # 开发明文,契约保留开关
+
+controlPlane: { replicas: 1 }
+aiWorker: { replicas: 1 }
+clusterAgent: { replicas: 1 }
+frontend: { replicas: 1 }
+
+ingress:
+  enabled: true
+  host: "aiops.dev.local"
+  tls:
+    enabled: false
+
+networkPolicy:
+  enabled: false      # 开发放松,便于本地调试
+
+podAntiAffinity: false
+topologySpread: false

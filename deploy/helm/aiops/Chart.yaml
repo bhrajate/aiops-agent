@@ -1,0 +1,18 @@
+apiVersion: v2
+name: aiops
+description: |
+  生产级 AIOps Agent —— Incident 驱动、证据优先、默认只读的 Kubernetes RCA 平台。
+  含 control-plane / ai-worker / cluster-agent(只读 RBAC) / frontend 四组件,
+  以及 mTLS、NetworkPolicy、Ingress(TLS)。依赖的 PostgreSQL / Temporal / Kafka /
+  对象存储视为外部托管服务,通过 values 注入连接信息。
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - aiops
+  - sre
+  - incident
+  - rca
+  - kubernetes
+maintainers:
+  - name: AIOps Team

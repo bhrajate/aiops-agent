@@ -1,0 +1,49 @@
+# 公共 API 对外入口(TLS 终止)。仅暴露 :8088;内部 API :8090 绝不经此暴露。
+# TLS 证书由 cert-manager 签发(annotation)或手工放入 Secret aiops-public-tls。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: control-plane
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: control-plane
+    app.kubernetes.io/part-of: aiops
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # SSE 长连接:关闭代理缓冲,放宽读超时。
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - aiops.example.com
+      secretName: aiops-public-tls
+  rules:
+    - host: aiops.example.com
+      http:
+        paths:
+          # 前端静态资源
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 8080
+          # 公共 API + SSE
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 8088
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: control-plane
+                port:
+                  number: 8088

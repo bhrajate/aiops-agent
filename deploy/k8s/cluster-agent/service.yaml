@@ -1,0 +1,18 @@
+# Cluster Agent Service(:9100)—— 仅集群内 ClusterIP,不经 Ingress 暴露。
+# 仅 control-plane 可入站(见 networkpolicy.yaml)。
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-agent
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/part-of: aiops
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cluster-agent
+  ports:
+    - name: tools
+      port: 9100
+      targetPort: tools

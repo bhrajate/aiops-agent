@@ -1,0 +1,53 @@
+# 非敏感配置(统一前缀 AIOPS_)。敏感项(DSN/密钥/证书)见 20-secret.example.yaml。
+# 依赖的 PostgreSQL / Temporal / Kafka / MinIO 为托管服务或独立 chart,
+# 这里仅给出连接占位,按环境替换为真实 Service DNS 或托管端点。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-config
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+data:
+  # ---- 网络监听 ----
+  AIOPS_PUBLIC_ADDR: ":8088"
+  AIOPS_INTERNAL_ADDR: ":8090"
+  AIOPS_CLUSTER_AGENT_ADDR: ":9100"
+
+  # ---- 事件总线 / 工作流(占位:替换为托管端点)----
+  AIOPS_KAFKA_BROKERS: "kafka-bootstrap.data.svc.cluster.local:9092"
+  AIOPS_TEMPORAL_HOSTPORT: "temporal-frontend.temporal.svc.cluster.local:7233"
+  AIOPS_TEMPORAL_NAMESPACE: "default"
+  AIOPS_TEMPORAL_QUEUE: "investigation-ai"
+  AIOPS_TASK_QUEUE: "investigation-ai"
+
+  # ---- 对象存储(证据快照;密钥走 Secret)----
+  AIOPS_S3_ENDPOINT: "http://minio.data.svc.cluster.local:9000"
+  AIOPS_S3_BUCKET: "aiops-evidence"
+
+  # ---- 组件互联(集群内 Service DNS)----
+  AIOPS_CLUSTER_AGENT_URL: "https://cluster-agent.aiops.svc.cluster.local:9100"
+  AIOPS_CONTROL_INTERNAL_URL: "http://control-plane-internal.aiops.svc.cluster.local:8090"
+  AIOPS_CLUSTER_ID: "prod-cn-1"
+  AIOPS_TENANT: "default"
+
+  # ---- 认证(生产用 OIDC;见 SECURITY.md §1)----
+  AIOPS_AUTH_MODE: "oidc"
+  AIOPS_OIDC_AUDIENCE: "aiops"
+
+  # ---- Model Gateway ----
+  AIOPS_MODEL_PROVIDER: "anthropic"
+  AIOPS_ANTHROPIC_MODEL: "claude-opus-4-8[1M]"
+
+  # ---- mTLS(Tool Gateway ↔ Cluster Agent;生产必开)----
+  AIOPS_AGENT_TLS_ENABLED: "true"
+  AIOPS_AGENT_TLS_CERT: "/certs/agent.crt"
+  AIOPS_AGENT_TLS_KEY: "/certs/agent.key"
+  AIOPS_AGENT_TLS_CLIENT_CA: "/certs/ca.crt"
+  AIOPS_AGENT_MTLS_ENABLED: "true"
+  AIOPS_AGENT_CLIENT_CERT: "/certs/client.crt"
+  AIOPS_AGENT_CLIENT_KEY: "/certs/client.key"
+  AIOPS_AGENT_CA: "/certs/ca.crt"
+
+  # ---- 可靠性 ----
+  AIOPS_MAX_DELIVERY_ATTEMPTS: "5"

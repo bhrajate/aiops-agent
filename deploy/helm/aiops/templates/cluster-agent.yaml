@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/component: cluster-agent
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.clusterAgent.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-agent
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cluster-agent
+        app.kubernetes.io/component: cluster-agent
+        app.kubernetes.io/part-of: aiops
+    spec:
+      serviceAccountName: cluster-agent
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      {{- include "aiops.antiAffinity" (list "cluster-agent" .) | nindent 6 }}
+      containers:
+        - name: cluster-agent
+          image: {{ include "aiops.image" (list .Values.clusterAgent . "cluster-agent") | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: tools
+              containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: {{ include "aiops.secretName" . }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: tools
+              scheme: {{ if .Values.mtls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: tools
+              scheme: {{ if .Values.mtls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.clusterAgent.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          {{- if .Values.mtls.enabled }}
+          volumeMounts:
+            - name: agent-tls
+              mountPath: {{ .Values.mtls.mountPath }}
+              readOnly: true
+          {{- end }}
+      {{- if .Values.mtls.enabled }}
+      volumes:
+        - name: agent-tls
+          secret:
+            secretName: {{ .Values.mtls.agentSecret }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cluster-agent
+  ports:
+    - name: tools
+      port: 9100
+      targetPort: tools

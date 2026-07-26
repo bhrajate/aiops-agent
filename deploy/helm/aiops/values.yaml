@@ -1,0 +1,126 @@
+# =============================================================================
+# AIOps Agent Helm chart 默认值(生产基线)。
+# 用 values-dev.yaml / values-prod.yaml 覆盖切换环境。
+# =============================================================================
+
+# 全局镜像仓库前缀与统一 tag(各组件可单独覆盖 image.tag)。
+global:
+  imageRegistry: ghcr.io/aiops
+  imageTag: latest
+  imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ---- 集群级资源(ClusterRole/Binding)开关 ----
+rbac:
+  # cluster-agent 只读 ClusterRole(安全核心)。多集群共享 chart 时仅装一次可关此项。
+  create: true
+
+# ---- 非敏感配置(渲染进 ConfigMap aiops-config)----
+config:
+  clusterId: "prod-cn-1"
+  tenant: "default"
+  publicAddr: ":8088"
+  internalAddr: ":8090"
+  clusterAgentAddr: ":9100"
+  kafkaBrokers: "kafka-bootstrap.data.svc.cluster.local:9092"
+  temporalHostPort: "temporal-frontend.temporal.svc.cluster.local:7233"
+  temporalNamespace: "default"
+  temporalQueue: "investigation-ai"
+  s3Endpoint: "http://minio.data.svc.cluster.local:9000"
+  s3Bucket: "aiops-evidence"
+  authMode: "oidc"                 # hs256 | oidc | disabled
+  oidcAudience: "aiops"
+  modelProvider: "anthropic"       # mock | anthropic
+  anthropicModel: "claude-opus-4-8[1M]"
+  maxDeliveryAttempts: "5"
+  # 组件互联(默认按 release 命名的集群内 DNS,模板会补全)。
+  clusterAgentUrlOverride: ""      # 留空则模板按 mTLS 开关自动生成 http/https URL
+  controlInternalUrlOverride: ""
+
+# ---- 敏感配置 ----
+# 生产强烈建议 externalSecret.enabled=true(由 External Secrets / Vault 注入),
+# chart 不渲染明文 Secret。仅演示/自管时用 secrets.create=true 直接注入(明文入 values,慎用)。
+secrets:
+  create: true
+  # 若已用其它方式创建了同名 Secret,可设 create=false 并在此填名字。
+  existingSecret: ""
+  data:
+    dbDsn: "postgres://aiops:CHANGE_ME@postgres.data.svc.cluster.local:5432/aiops?sslmode=require"
+    internalToken: "CHANGE_ME_internal_token"
+    webhookSecret: "CHANGE_ME_webhook_secret"
+    authHs256Secret: ""
+    oidcIssuer: "https://idp.corp.example/realms/aiops"
+    oidcJwksUrl: "https://idp.corp.example/realms/aiops/protocol/openid-connect/certs"
+    s3AccessKey: "CHANGE_ME"
+    s3SecretKey: "CHANGE_ME"
+    anthropicApiKey: ""
+
+# ---- mTLS(Tool Gateway ↔ cluster-agent)----
+mtls:
+  enabled: true
+  # 证书 Secret(由 deploy/certs/gen-certs.sh 生成后 kubectl create;或 cert-manager 签发)。
+  agentSecret: "aiops-agent-tls"    # ca.crt / agent.crt / agent.key
+  clientSecret: "aiops-client-tls"  # ca.crt / client.crt / client.key
+  mountPath: "/certs"
+
+# ---- 各组件 ----
+controlPlane:
+  replicas: 2
+  image:
+    repository: ""     # 留空 → {global.imageRegistry}/control-plane
+    tag: ""            # 留空 → global.imageTag
+  resources:
+    requests: { cpu: "100m", memory: "128Mi" }
+    limits: { cpu: "1", memory: "512Mi" }
+
+aiWorker:
+  replicas: 2
+  image:
+    repository: ""
+    tag: ""
+  resources:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits: { cpu: "2", memory: "1Gi" }
+
+clusterAgent:
+  replicas: 2
+  image:
+    repository: ""
+    tag: ""
+  resources:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits: { cpu: "500m", memory: "256Mi" }
+
+frontend:
+  replicas: 2
+  image:
+    repository: ""
+    tag: ""
+  resources:
+    requests: { cpu: "20m", memory: "32Mi" }
+    limits: { cpu: "200m", memory: "128Mi" }
+
+# ---- 公共 API + 前端入口 ----
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "aiops.example.com"
+  ingressControllerNamespace: "ingress-nginx"   # 供 NetworkPolicy 放行
+  tls:
+    enabled: true
+    secretName: "aiops-public-tls"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+
+# ---- 网络策略 ----
+networkPolicy:
+  enabled: true
+
+# ---- 通用调度约束 ----
+podAntiAffinity: true          # 副本跨节点(preferred)
+topologySpread: true

@@ -1,0 +1,26 @@
+AIOps Agent 已部署到命名空间 {{ .Release.Namespace }}(release: {{ .Release.Name }})。
+
+组件:
+  - control-plane  ({{ .Values.controlPlane.replicas }} 副本)  公共 API :8088 / 内部 API :8090
+  - ai-worker      ({{ .Values.aiWorker.replicas }} 副本)  Temporal Worker(无入站)
+  - cluster-agent  ({{ .Values.clusterAgent.replicas }} 副本)  只读工具 :9100  {{ if .Values.mtls.enabled }}(mTLS 开){{ else }}(mTLS 关){{ end }}
+  - frontend       ({{ .Values.frontend.replicas }} 副本)  nginx :8080
+
+{{- if .Values.mtls.enabled }}
+
+⚠ mTLS 已开启,请确认已创建证书 Secret:
+    {{ .Values.mtls.agentSecret }}   (ca.crt/agent.crt/agent.key)
+    {{ .Values.mtls.clientSecret }}  (ca.crt/client.crt/client.key)
+  生成:bash deploy/certs/gen-certs.sh
+{{- end }}
+{{- if not .Values.secrets.create }}
+
+⚠ secrets.create=false:请确认外部 Secret「{{ .Values.secrets.existingSecret }}」已由 Vault/External Secrets 注入。
+{{- end }}
+{{- if .Values.ingress.enabled }}
+
+访问入口:https://{{ .Values.ingress.host }}
+{{- end }}
+
+查看状态:
+  kubectl -n {{ .Release.Namespace }} get pods,svc,ingress

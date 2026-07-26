@@ -1,0 +1,105 @@
+# Cluster Agent:每集群只读数据平面,暴露类型化只读工具(:9100)。
+# 作为 mTLS 服务端,校验 control-plane 客户端证书。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-agent
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/part-of: aiops
+    app.kubernetes.io/component: cluster-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-agent
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cluster-agent
+        app.kubernetes.io/part-of: aiops
+        app.kubernetes.io/component: cluster-agent
+    spec:
+      serviceAccountName: cluster-agent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: cluster-agent
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cluster-agent
+      containers:
+        - name: cluster-agent
+          image: ghcr.io/aiops/cluster-agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: tools
+              containerPort: 9100
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: aiops-secrets
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: tools
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: tools
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # mTLS 服务端证书 + 校验客户端的 CA。
+            - name: agent-tls
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: agent-tls
+          secret:
+            secretName: aiops-agent-tls
+            optional: true

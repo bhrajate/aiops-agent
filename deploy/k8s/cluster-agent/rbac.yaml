@@ -1,0 +1,85 @@
+# =============================================================================
+# Cluster Agent 只读 RBAC —— 安全核心。
+#
+# 设计约束(README「默认只读」+ SECURITY.md):首版所有生产工具均为只读,
+# LLM 无任何生产写权限。因此 ClusterRole 仅授予 get/list/watch,
+# 绝不含 create/update/patch/delete,更无 pods/exec、pods/attach、
+# pods/portforward 等可产生副作用的子资源。
+#
+# 审计要点:任何对此 ClusterRole 的变更都应视为高危,需评审。
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-agent
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/part-of: aiops
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aiops-cluster-agent-readonly
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/part-of: aiops
+rules:
+  # 核心工作负载与拓扑对象:仅读。
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log          # search_logs:读取日志(只读子资源)
+      - services
+      - endpoints
+      - events
+      - nodes
+      - namespaces
+      - configmaps
+      - replicationcontrollers
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources:
+      - events
+    verbs: ["get", "list", "watch"]
+  # inspect_dependencies:网络策略/入口拓扑(只读)。
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["get", "list", "watch"]
+  # 变更历史:list_recent_changes 参考 rollout 修订(只读)。
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aiops-cluster-agent-readonly
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    app.kubernetes.io/part-of: aiops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aiops-cluster-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: cluster-agent
+    namespace: aiops

@@ -1,0 +1,37 @@
+# 公共 API Service(前端 + 外部 webhook 经 Ingress 消费)。
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: control-plane
+    app.kubernetes.io/part-of: aiops
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: control-plane
+  ports:
+    - name: public
+      port: 8088
+      targetPort: public
+---
+# 内部 API Service(:8090)—— 仅供集群内 AI Worker 回写 + Tool Gateway。
+# 不经 Ingress 暴露;由 NetworkPolicy 限制入站来源。
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane-internal
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: control-plane
+    app.kubernetes.io/part-of: aiops
+    app.kubernetes.io/component: internal-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: control-plane
+  ports:
+    - name: internal
+      port: 8090
+      targetPort: internal

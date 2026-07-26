@@ -1,0 +1,104 @@
+# =============================================================================
+# NetworkPolicy —— 东西向流量最小化(需 CNI 支持,如 Calico/Cilium)。
+#   1) 默认拒绝命名空间内所有入站(白名单放行)。
+#   2) cluster-agent :9100 仅接受来自 control-plane 的入站。
+#   3) control-plane 内部 API :8090 仅接受来自 ai-worker + control-plane 的入站,
+#      公共 API :8088 接受来自 Ingress 与 frontend 的入站。
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# cluster-agent:只接受来自 control-plane 的 :9100 入站。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-agent-ingress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-agent
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: control-plane
+      ports:
+        - protocol: TCP
+          port: 9100
+---
+# control-plane:
+#   - 公共 API :8088 接受 Ingress 控制器(需其命名空间带标签)与 frontend。
+#   - 内部 API :8090 仅接受 ai-worker 与 control-plane 自身(Tool Gateway 回环)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-plane-ingress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane
+  policyTypes:
+    - Ingress
+  ingress:
+    # 公共 API :8088 —— 来自 Ingress 控制器命名空间 + 集群内 frontend。
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: frontend
+      ports:
+        - protocol: TCP
+          port: 8088
+    # 内部 API :8090 —— 仅 ai-worker 与 control-plane 自身。
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-worker
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: control-plane
+      ports:
+        - protocol: TCP
+          port: 8090
+---
+# frontend:接受来自 Ingress 控制器的 :8080 入站。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080

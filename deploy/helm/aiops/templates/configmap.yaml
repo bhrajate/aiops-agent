@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aiops-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+data:
+  AIOPS_PUBLIC_ADDR: {{ .Values.config.publicAddr | quote }}
+  AIOPS_INTERNAL_ADDR: {{ .Values.config.internalAddr | quote }}
+  AIOPS_CLUSTER_AGENT_ADDR: {{ .Values.config.clusterAgentAddr | quote }}
+  AIOPS_KAFKA_BROKERS: {{ .Values.config.kafkaBrokers | quote }}
+  AIOPS_TEMPORAL_HOSTPORT: {{ .Values.config.temporalHostPort | quote }}
+  AIOPS_TEMPORAL_NAMESPACE: {{ .Values.config.temporalNamespace | quote }}
+  AIOPS_TEMPORAL_QUEUE: {{ .Values.config.temporalQueue | quote }}
+  AIOPS_TASK_QUEUE: {{ .Values.config.temporalQueue | quote }}
+  AIOPS_S3_ENDPOINT: {{ .Values.config.s3Endpoint | quote }}
+  AIOPS_S3_BUCKET: {{ .Values.config.s3Bucket | quote }}
+  AIOPS_CLUSTER_AGENT_URL: {{ include "aiops.clusterAgentUrl" . | quote }}
+  AIOPS_CONTROL_INTERNAL_URL: {{ include "aiops.controlInternalUrl" . | quote }}
+  AIOPS_CLUSTER_ID: {{ .Values.config.clusterId | quote }}
+  AIOPS_TENANT: {{ .Values.config.tenant | quote }}
+  AIOPS_AUTH_MODE: {{ .Values.config.authMode | quote }}
+  AIOPS_OIDC_AUDIENCE: {{ .Values.config.oidcAudience | quote }}
+  AIOPS_MODEL_PROVIDER: {{ .Values.config.modelProvider | quote }}
+  AIOPS_ANTHROPIC_MODEL: {{ .Values.config.anthropicModel | quote }}
+  AIOPS_MAX_DELIVERY_ATTEMPTS: {{ .Values.config.maxDeliveryAttempts | quote }}
+{{- if .Values.mtls.enabled }}
+  AIOPS_AGENT_TLS_ENABLED: "true"
+  AIOPS_AGENT_TLS_CERT: {{ printf "%s/agent.crt" .Values.mtls.mountPath | quote }}
+  AIOPS_AGENT_TLS_KEY: {{ printf "%s/agent.key" .Values.mtls.mountPath | quote }}
+  AIOPS_AGENT_TLS_CLIENT_CA: {{ printf "%s/ca.crt" .Values.mtls.mountPath | quote }}
+  AIOPS_AGENT_MTLS_ENABLED: "true"
+  AIOPS_AGENT_CLIENT_CERT: {{ printf "%s/client.crt" .Values.mtls.mountPath | quote }}
+  AIOPS_AGENT_CLIENT_KEY: {{ printf "%s/client.key" .Values.mtls.mountPath | quote }}
+  AIOPS_AGENT_CA: {{ printf "%s/ca.crt" .Values.mtls.mountPath | quote }}
+{{- else }}
+  AIOPS_AGENT_TLS_ENABLED: "false"
+  AIOPS_AGENT_MTLS_ENABLED: "false"
+{{- end }}

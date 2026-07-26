@@ -1,0 +1,96 @@
+# cluster-agent 只读 RBAC —— 安全核心:仅 get/list/watch,绝无 write/exec。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    {{- include "aiops.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-cluster-agent-readonly
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    {{- include "aiops.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - events
+      - nodes
+      - namespaces
+      - configmaps
+      - replicationcontrollers
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-cluster-agent-readonly
+  labels:
+    app.kubernetes.io/name: cluster-agent
+    {{- include "aiops.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-cluster-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: cluster-agent
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+---
+# control-plane / ai-worker / frontend 均不访问 K8s API,不绑定 RBAC。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: control-plane
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: control-plane
+    {{- include "aiops.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: ai-worker
+    {{- include "aiops.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: frontend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: frontend
+    {{- include "aiops.labels" . | nindent 4 }}
+automountServiceAccountToken: false

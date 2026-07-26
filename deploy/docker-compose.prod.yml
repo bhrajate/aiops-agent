@@ -1,0 +1,127 @@
+# =============================================================================
+# 生产化 compose overlay —— 在开发 compose(基础设施)之上叠加四个应用组件,
+# 并启用 mTLS / 密钥文件 / 只读根文件系统 / 非 root。
+#
+# 用法(与基础设施 compose 叠加):
+#   1) 生成证书:  bash certs/gen-certs.sh
+#   2) 准备密钥:  cp .env.prod.example .env.prod  && 编辑填入真实值
+#   3) 启动:      docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                   --env-file .env.prod up -d --build
+#
+# 与开发版差异:
+#   - 开发版仅拉起基础设施(postgres/temporal/redpanda/minio/redis),应用进程本地 `make run`;
+#     本 overlay 把四个应用组件也容器化,贴近生产拓扑。
+#   - mTLS 开启(AIOPS_AGENT_*_ENABLED=true),证书从 ./certs 只读挂载到 /certs。
+#   - 密钥经 --env-file .env.prod 注入,不写入 compose/镜像。
+#   - 应用容器 read_only + no-new-privileges + cap_drop ALL。
+#   - 组件互联走 compose 服务名(非 localhost)。
+# =============================================================================
+name: aiops
+
+services:
+  control-plane:
+    build:
+      context: ../control-plane
+      dockerfile: Dockerfile
+    image: ghcr.io/aiops/control-plane:local
+    container_name: aiops-control-plane
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      AIOPS_PUBLIC_ADDR: ":8088"
+      AIOPS_INTERNAL_ADDR: ":8090"
+      AIOPS_DB_DSN: ${AIOPS_DB_DSN:-postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable}
+      AIOPS_KAFKA_BROKERS: redpanda:29092
+      AIOPS_TEMPORAL_HOSTPORT: temporal:7233
+      AIOPS_TEMPORAL_NAMESPACE: default
+      AIOPS_S3_ENDPOINT: http://minio:9000
+      AIOPS_S3_BUCKET: aiops-evidence
+      AIOPS_S3_ACCESS_KEY: ${AIOPS_S3_ACCESS_KEY:-minioadmin}
+      AIOPS_S3_SECRET_KEY: ${AIOPS_S3_SECRET_KEY:-minioadmin}
+      AIOPS_CLUSTER_AGENT_URL: https://cluster-agent:9100
+      AIOPS_CONTROL_INTERNAL_URL: http://control-plane:8090
+      AIOPS_CLUSTER_ID: prod-cn-1
+      AIOPS_INTERNAL_TOKEN: ${AIOPS_INTERNAL_TOKEN:?set in .env.prod}
+      AIOPS_WEBHOOK_SECRET: ${AIOPS_WEBHOOK_SECRET:-}
+      AIOPS_AUTH_MODE: ${AIOPS_AUTH_MODE:-hs256}
+      AIOPS_AUTH_HS256_SECRET: ${AIOPS_AUTH_HS256_SECRET:-}
+      # mTLS 客户端(调 cluster-agent)
+      AIOPS_AGENT_MTLS_ENABLED: "true"
+      AIOPS_AGENT_CLIENT_CERT: /certs/client.crt
+      AIOPS_AGENT_CLIENT_KEY: /certs/client.key
+      AIOPS_AGENT_CA: /certs/ca.crt
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./certs:/certs:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  cluster-agent:
+    build:
+      context: ../cluster-agent
+      dockerfile: Dockerfile
+    image: ghcr.io/aiops/cluster-agent:local
+    container_name: aiops-cluster-agent
+    environment:
+      AIOPS_CLUSTER_AGENT_ADDR: ":9100"
+      AIOPS_CLUSTER_ID: prod-cn-1
+      # mTLS 服务端
+      AIOPS_AGENT_TLS_ENABLED: "true"
+      AIOPS_AGENT_TLS_CERT: /certs/agent.crt
+      AIOPS_AGENT_TLS_KEY: /certs/agent.key
+      AIOPS_AGENT_TLS_CLIENT_CA: /certs/ca.crt
+    volumes:
+      - ./certs:/certs:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  ai-worker:
+    build:
+      context: ../ai-worker
+      dockerfile: Dockerfile
+    image: ghcr.io/aiops/ai-worker:local
+    container_name: aiops-ai-worker
+    depends_on:
+      temporal: { condition: service_healthy }
+    environment:
+      AIOPS_TEMPORAL_HOSTPORT: temporal:7233
+      AIOPS_TEMPORAL_NAMESPACE: default
+      AIOPS_TASK_QUEUE: investigation-ai
+      AIOPS_CONTROL_INTERNAL_URL: http://control-plane:8090
+      AIOPS_INTERNAL_TOKEN: ${AIOPS_INTERNAL_TOKEN:?set in .env.prod}
+      AIOPS_MODEL_PROVIDER: ${AIOPS_MODEL_PROVIDER:-mock}
+      AIOPS_ANTHROPIC_API_KEY: ${AIOPS_ANTHROPIC_API_KEY:-}
+      AIOPS_ANTHROPIC_MODEL: ${AIOPS_ANTHROPIC_MODEL:-claude-opus-4-8[1M]}
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    image: ghcr.io/aiops/frontend:local
+    container_name: aiops-frontend
+    depends_on:
+      - control-plane
+    ports:
+      - "8080:8080"
+    volumes:
+      # 覆盖镜像内置(指向 K8s DNS)的配置为 compose 服务名反代。
+      - ./docker/frontend-nginx.compose.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

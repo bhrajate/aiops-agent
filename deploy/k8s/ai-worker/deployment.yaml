@@ -1,0 +1,103 @@
+# AI Worker:Temporal RCA Worker(Python)。无入站端口,主动连出 Temporal + 内部 API。
+# 因此不做 HTTP 探针:就绪性由「进程存活 + Temporal 轮询成功」体现,
+# 存活探针用进程存在性判断(worker 主进程退出即重启)。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-worker
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: ai-worker
+    app.kubernetes.io/part-of: aiops
+    app.kubernetes.io/component: ai-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ai-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ai-worker
+        app.kubernetes.io/part-of: aiops
+        app.kubernetes.io/component: ai-worker
+    spec:
+      serviceAccountName: ai-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ai-worker
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: ai-worker
+      containers:
+        - name: ai-worker
+          image: ghcr.io/aiops/ai-worker:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: aiops-secrets
+          # 无 HTTP 端点:用进程存在性作存活探针(worker 主进程存活即 Ready)。
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "grep -qa aiops_worker /proc/*/cmdline"
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "grep -qa aiops_worker /proc/*/cmdline"
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            # uv 运行期缓存 / tmp(readOnlyRootFilesystem 下需可写临时目录)。
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

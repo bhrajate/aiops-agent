@@ -1,0 +1,56 @@
+# 生产覆盖:多副本、OIDC、anthropic、mTLS 必开、NetworkPolicy 开、
+# 敏感项由外部 Secret 注入(此处 secrets.create=false,用 existingSecret)。
+global:
+  imageRegistry: ghcr.io/aiops
+  imageTag: "v0.1.0"          # 固定 tag,禁用 latest
+  imagePullSecrets:
+    - name: ghcr-pull
+
+config:
+  clusterId: "prod-cn-1"
+  authMode: "oidc"
+  modelProvider: "anthropic"
+  anthropicModel: "claude-opus-4-8[1M]"
+  kafkaBrokers: "kafka-bootstrap.data.svc.cluster.local:9092"
+  temporalHostPort: "temporal-frontend.temporal.svc.cluster.local:7233"
+  s3Endpoint: "https://s3.cn-north-1.amazonaws.com.cn"
+  s3Bucket: "aiops-evidence-prod"
+
+# 生产:不在 values 落明文,改用 External Secrets Operator / Vault 生成的同名 Secret。
+secrets:
+  create: false
+  existingSecret: "aiops-secrets"
+
+mtls:
+  enabled: true
+  agentSecret: "aiops-agent-tls"
+  clientSecret: "aiops-client-tls"
+
+controlPlane:
+  replicas: 3
+  resources:
+    requests: { cpu: "250m", memory: "256Mi" }
+    limits: { cpu: "2", memory: "1Gi" }
+aiWorker:
+  replicas: 3
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits: { cpu: "2", memory: "2Gi" }
+clusterAgent:
+  replicas: 2
+frontend:
+  replicas: 3
+
+ingress:
+  enabled: true
+  className: "nginx"
+  host: "aiops.corp.example"
+  tls:
+    enabled: true
+    secretName: "aiops-public-tls"
+
+networkPolicy:
+  enabled: true
+
+podAntiAffinity: true
+topologySpread: true
