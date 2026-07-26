@@ -1,0 +1,36 @@
+[project]
+name = "aiops-worker"
+version = "0.1.0"
+description = "AIOps AI reasoning plane: Temporal Python worker for Investigation RCA"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "temporalio>=1.7,<2",
+    "pydantic>=2.6,<3",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.39"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+aiops-worker = "aiops_worker.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aiops_worker"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true

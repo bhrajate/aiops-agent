@@ -14,14 +14,25 @@ type TimeRange struct {
 	To   string `json:"to"`
 }
 
+// ResourceRef identifies the target resource. Sent by the Tool Gateway as an
+// object (see docs/INTEGRATION.md); all fields optional.
+type ResourceRef struct {
+	Kind string `json:"kind,omitempty"`
+	Name string `json:"name,omitempty"`
+	UID  string `json:"uid,omitempty"`
+}
+
 // Scope is injected by the Tool Gateway and constrains every tool call to a
 // single cluster / namespace / resource / time window. Tools MUST honour it.
 type Scope struct {
-	ClusterID string     `json:"cluster_id"`
-	Namespace string     `json:"namespace"`
-	Resource  string     `json:"resource,omitempty"`
-	TimeRange *TimeRange `json:"time_range,omitempty"`
+	ClusterID string      `json:"cluster_id"`
+	Namespace string      `json:"namespace"`
+	Resource  ResourceRef `json:"resource,omitempty"`
+	TimeRange *TimeRange  `json:"time_range,omitempty"`
 }
+
+// ResourceName returns the target resource name (empty if unset).
+func (s Scope) ResourceName() string { return s.Resource.Name }
 
 // Result is the normalized tool output returned to the Tool Gateway.
 //

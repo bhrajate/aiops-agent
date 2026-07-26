@@ -1,0 +1,73 @@
+"""Worker entrypoint: connect to Temporal, register the workflow + activities,
+and run the ``investigation-ai`` task queue.
+
+Uses the Pydantic data converter so contract models serialize as JSON on the
+wire (cross-language compatible with the Go control plane).
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.worker import Worker
+
+from .activities import InvestigationActivities
+from .config import load_settings
+from .model_gateway import build_provider
+from .workflow import InvestigationWorkflow
+
+logger = logging.getLogger("aiops_worker")
+
+
+async def run_worker() -> None:
+    settings = load_settings()
+    provider = build_provider(settings)
+    logger.info(
+        "starting worker: temporal=%s ns=%s queue=%s provider=%s",
+        settings.temporal_hostport,
+        settings.temporal_namespace,
+        settings.task_queue,
+        provider.name,
+    )
+
+    client = await Client.connect(
+        settings.temporal_hostport,
+        namespace=settings.temporal_namespace,
+        data_converter=pydantic_data_converter,
+    )
+
+    acts = InvestigationActivities(provider, http_timeout_sec=settings.http_timeout_sec)
+    worker = Worker(
+        client,
+        task_queue=settings.task_queue,
+        workflows=[InvestigationWorkflow],
+        activities=[
+            acts.load_incident_context,
+            acts.run_quick_triage,
+            acts.evaluate_deep_rca_policy,
+            acts.build_investigation_plan,
+            acts.build_supplemental_plan,
+            acts.retrieve_runbooks,
+            acts.run_analyzer,
+            acts.synthesize_hypotheses,
+            acts.publish_diagnosis,
+            acts.record_phase,
+            acts.record_event,
+            acts.record_usage,
+        ],
+    )
+    await worker.run()
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    asyncio.run(run_worker())
+
+
+if __name__ == "__main__":
+    main()

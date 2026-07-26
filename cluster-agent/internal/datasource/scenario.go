@@ -27,8 +27,8 @@ type scenario struct {
 
 	baselineErr float64 // baseline 5xx ratio (fraction, e.g. 0.001)
 	peakErr     float64 // peak 5xx ratio on the affected surface
-	baselineP99 int      // baseline p99 latency ms
-	peakP99     int      // peak p99 latency ms
+	baselineP99 int     // baseline p99 latency ms
+	peakP99     int     // peak p99 latency ms
 
 	dependency  string // downstream dependency (service or datastore)
 	depLatency  int    // observed dependency latency ms
@@ -46,11 +46,11 @@ type scenario struct {
 // remaining three fault categories so the full taxonomy is demonstrable.
 func resolveScenario(scope Scope) scenario {
 	ns := strings.ToLower(scope.Namespace)
-	res := strings.ToLower(scope.Resource)
+	res := strings.ToLower(scope.ResourceName())
 	if res == "" {
 		res = defaultResourceFor(ns)
 	}
-	svc := scope.Resource
+	svc := scope.ResourceName()
 	if svc == "" {
 		svc = defaultResourceFor(ns)
 	}
