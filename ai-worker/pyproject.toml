@@ -8,17 +8,29 @@ dependencies = [
     "temporalio>=1.7,<2",
     "pydantic>=2.6,<3",
     "httpx>=0.27,<1",
+    "numpy>=1.26,<3",
 ]
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.39"]
+# Database access for the Evaluation service (evaluation_runs) and pgvector
+# semantic RAG (knowledge_items). Optional: the mock embedding provider and all
+# unit tests run without a real DB.
+db = [
+    "psycopg[binary]>=3.1,<4",
+    "pgvector>=0.2,<1",
+]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "psycopg[binary]>=3.1,<4",
+    "pgvector>=0.2,<1",
 ]
 
 [project.scripts]
 aiops-worker = "aiops_worker.main:main"
+aiops-evaluate = "aiops_worker.evaluation.run:main"
+aiops-reindex = "aiops_worker.knowledge.reindex:main"
 
 [build-system]
 requires = ["hatchling"]

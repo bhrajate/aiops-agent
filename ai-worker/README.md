@@ -37,12 +37,24 @@ ai-worker/
 │   ├── activities.py         # 所有 Temporal Activity
 │   ├── workflow.py           # InvestigationWorkflow 状态机
 │   ├── main.py               # Worker 入口(连 Temporal、注册、运行)
-│   └── model_gateway/
-│       ├── __init__.py       # build_provider 工厂
-│       ├── base.py           # ModelProvider 抽象 + 注入防护助手
-│       ├── mock.py           # 确定性 MockProvider(四类故障场景)
-│       └── anthropic_provider.py  # 真实 Claude(可选依赖)
-└── tests/                    # 不依赖真实 Temporal / 网络
+│   ├── model_gateway/
+│   │   ├── __init__.py       # build_provider 工厂
+│   │   ├── base.py           # ModelProvider 抽象 + 注入防护助手
+│   │   ├── mock.py           # 确定性 MockProvider(四类故障场景)
+│   │   └── anthropic_provider.py  # 真实 Claude(可选依赖)
+│   ├── evaluation/           # 评测服务(离线回放 + 质量门槛,architecture 18)
+│   │   ├── models.py         # GoldenCase / EvaluationResult / RunSummary
+│   │   ├── pipeline.py       # OfflineReplayPipeline(无 Temporal)
+│   │   ├── metrics.py        # Top-1/Top-3、引用率、幻觉率、P95、门槛
+│   │   ├── seed_cases.py     # 5 条种子 Golden Cases(四类故障)
+│   │   ├── runner.py         # 批量回放 + 聚合
+│   │   ├── store.py          # 读 golden_cases / 写 evaluation_runs(db extra)
+│   │   └── run.py            # CLI: python -m aiops_worker.evaluation.run
+│   └── knowledge/            # pgvector 语义 RAG(architecture 12.2)
+│       ├── embeddings.py     # EmbeddingProvider + 确定性 MockEmbeddingProvider
+│       ├── store.py          # KnowledgeStore(索引/余弦检索,db extra)
+│       └── reindex.py        # CLI: python -m aiops_worker.knowledge.reindex
+└── tests/                    # 不依赖真实 Temporal / 网络(DB 集成测试自动跳过)
 ```
 
 ## 状态机(architecture 7.3 / 7.4)
@@ -90,13 +102,74 @@ Analyzer 通过 `workflow.gather` 并行运行,只交换结构化状态,不互�
    证据不足或未知故障 → 低置信度 `unresolved`(workflow 走 needs_human 升级);
 5. 用量估算确定,可驱动预算会计与升级逻辑。
 
+## 评测服务(Evaluation,architecture 18)
+
+`aiops_worker/evaluation/` 提供**离线回放 + 质量门槛**能力,不依赖真实 Temporal:
+直接调用确定性策略函数与 `ModelProvider` 端到端跑一遍 RCA 推理管线
+(triage → deep-RCA gate → plan → 采证据 → synthesize → 诊断),对照 Golden Cases
+计算首版质量指标。
+
+模块:
+- `models.py` — `GoldenCase` / `SignalFixture` / `EvaluationResult` /
+  `EvaluationRunSummary`,对齐 `golden_cases` / `evaluation_runs` 表。
+- `pipeline.py` — `OfflineReplayPipeline`:复刻 workflow 主循环(含一次补充轮),
+  用确定性离线 collector 代替 Tool Gateway 产出实时/参考证据。
+- `metrics.py` — 指标计算(纯函数):
+  - **Top-1 / Top-3 根因命中率**:最高/前三假设语句是否包含期望根因关键词;
+  - **关键结论证据引用率**:被判定为 `supported` 的根因中,引用了 ≥1 条**实时**证据
+    的比例(目标 100%;参考知识 `type=knowledge` 不计入,architecture 12.2);
+  - **无证据支撑根因比例(幻觉率)**:`supported` 却无实时证据支撑的比例(目标 <5%);
+  - **P95 首次诊断耗时**(目标 <5min)。
+- `seed_cases.py` — 5 条种子 Golden Cases,覆盖四类故障(发布回归 / 资源瓶颈 /
+  依赖超时 / Pod 异常·配置)。SQL 形式见 `shared/sql/004_seed_golden_cases.sql`。
+- `store.py` — 直连 DB 读 `golden_cases`、写 `evaluation_runs`(需 `db` extra)。
+
+CLI:
+
+```bash
+make evaluate                          # 用种子用例离线回放 + 打印质量门槛报告
+# 或:
+uv run python -m aiops_worker.evaluation.run           # 种子用例
+uv run python -m aiops_worker.evaluation.run --from-db # 从 golden_cases 表加载
+uv run python -m aiops_worker.evaluation.run --write   # 汇总写入 evaluation_runs
+uv run python -m aiops_worker.evaluation.run --json    # 输出完整 JSON
+```
+
+`--from-db` / `--write` 需要 `AIOPS_DB_DSN`。进程退出码在任一门槛失败时非 0,便于接 CI。
+
+## pgvector 语义检索(RAG,architecture 12.2)
+
+`aiops_worker/knowledge/` 为 Knowledge Service 增加向量检索:
+- `embeddings.py` — `EmbeddingProvider` 抽象 + **确定性** `MockEmbeddingProvider`:
+  基于 SHA-256 signed feature hashing 把词袋映射到稳定的 1536 维单位向量
+  (匹配 `knowledge_items.embedding vector(1536)`),无需 API key、可复现、可测。
+  `anthropic` / `openai` / `local` 为留桩(TODO)。选择由 `AIOPS_EMBEDDING_PROVIDER`
+  决定(默认 `mock`)。
+- `store.py` — `KnowledgeStore`:为 `knowledge_items` 生成/回填 embedding,
+  检索用 pgvector 余弦距离 `ORDER BY embedding <=> query`。
+- `reindex.py` — 重建 embedding 的 CLI。
+
+**实时证据 vs 参考知识**边界保持不变:检索出的知识仍是 `type=knowledge`,
+只能生成假设/建议查询,不能证明根因(由证据类型在下游强制)。
+
+CLI:
+
+```bash
+export AIOPS_DB_DSN=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
+uv run python -m aiops_worker.knowledge.reindex                       # 重建全部 embedding
+uv run python -m aiops_worker.knowledge.reindex --query "发布回归导致依赖超时"  # 重建后做一次示例检索
+make reindex
+```
+
+需要 DB 相关能力时安装 `db` extra:`uv sync --extra db`(或 `make install`,dev extra 已含)。
+
 ## 本地启动
 
 先装依赖(阿里源已在 `pyproject.toml`/Makefile 内置):
 
 ```bash
 cd ai-worker
-make install            # uv sync --extra dev
+make install            # uv sync --extra dev(含 psycopg/pgvector,可跑 DB 集成测试)
 # 需要真实 Claude 时:make install-anthropic
 ```
 
@@ -105,6 +178,13 @@ make install            # uv sync --extra dev
 ```bash
 make test               # uv run pytest -q
 make check-import       # uv run python -c "import aiops_worker.workflow"
+```
+
+DB 集成测试(pgvector 检索 + evaluation_runs 写入)默认跳过;设置可达的
+`AIOPS_DB_DSN` 后会自动纳入:
+
+```bash
+AIOPS_DB_DSN=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable make test
 ```
 
 启动 Worker(需要 Temporal Server 在 `localhost:7233`;mock provider 无需模型密钥):
