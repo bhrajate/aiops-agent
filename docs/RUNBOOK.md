@@ -96,4 +96,4 @@ bash scripts/check-metrics.sh         # Prometheus /metrics 抓取
 
 ## 验收清单
 
-对照 [`../生产级AIOps-Agent架构设计.md`](../生产级AIOps-Agent架构设计.md) 第 22 节。落地情况见 [`ACCEPTANCE.md`](ACCEPTANCE.md)。
+对照 [`生产级AIOps-Agent架构设计.md`](生产级AIOps-Agent架构设计.md) 第 22 节。落地情况见 [`ACCEPTANCE.md`](ACCEPTANCE.md)。

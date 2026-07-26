@@ -6,7 +6,7 @@
 设计严格遵循仓库内契约:
 - `docs/INTEGRATION.md`(Temporal 约定、内部 API `:8090`)
 - `shared/schemas/contracts.md`(Signal/Incident/Investigation/Evidence/Hypothesis/DiagnosisResult)
-- `生产级AIOps-Agent架构设计.md`(第 7 / 8 / 12 / 14 节)
+- `docs/生产级AIOps-Agent架构设计.md`(第 7 / 8 / 12 / 14 节)
 
 ## 核心原则
 

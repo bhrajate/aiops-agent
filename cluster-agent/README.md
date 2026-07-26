@@ -2,7 +2,7 @@
 
 每个 Kubernetes 集群部署一个的**只读 Cluster Agent**。它是一个 Go HTTP 服务,监听 `:9100`,向 Tool Gateway 暴露一组**类型化只读工具**,代理集群内的 Kubernetes / 指标 / 日志 / 链路 / 变更 / 拓扑查询。
 
-契约来源:`docs/INTEGRATION.md`(Cluster Agent 工具协议)、`shared/schemas/contracts.md`、`生产级AIOps-Agent架构设计.md` §4.3 / §9。
+契约来源:`docs/INTEGRATION.md`(Cluster Agent 工具协议)、`shared/schemas/contracts.md`、`docs/生产级AIOps-Agent架构设计.md` §4.3 / §9。
 
 ## 设计约束
 
