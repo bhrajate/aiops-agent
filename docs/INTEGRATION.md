@@ -6,11 +6,11 @@
 
 | 组件 | 端口 | 协议 | 说明 |
 |---|---|---|---|
-| control-plane 公共 API | `8080` | HTTP/JSON + SSE | 前端 + 外部 webhook 消费 |
+| control-plane 公共 API | `8088` | HTTP/JSON + SSE | 前端 + 外部 webhook 消费 |
 | control-plane 内部 API | `8090` | HTTP/JSON | Tool Gateway + AI Worker 回写(仅集群内) |
 | cluster-agent | `9100` | HTTP/JSON | Tool Gateway 调用(首版免 mTLS,预留开关) |
 | ai-worker | 无入站 | — | Temporal Worker,主动连出 |
-| frontend (dev) | `5173` | HTTP | Vite,`/v1` 代理到 `8080` |
+| frontend (dev) | `5173` | HTTP | Vite,`/v1` 代理到 `8088` |
 | PostgreSQL | `5432` | — | 业务库 `aiops` |
 | Temporal | `7233` (gRPC) / `8233` (UI) | — | namespace `default` |
 | Redpanda (Kafka) | `19092` | Kafka | topics: `signals` `incidents` `investigations` |
@@ -55,7 +55,7 @@ POST /internal/investigations/{id}/diagnosis   { "diagnosis": <DiagnosisResult>,
 POST /internal/investigations/{id}/usage       { "usage": {...} }
 ```
 
-## 公共 API(control-plane `:8080`)—— 前端消费
+## 公共 API(control-plane `:8088`)—— 前端消费
 
 ```
 POST /v1/signals                                 # Signal Ingress,快速 2xx

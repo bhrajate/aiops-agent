@@ -97,7 +97,7 @@ services:
     ports:
       - "19092:19092"
     volumes:
-      - ./.data/redpanda:/var/lib/redpanda/data
+      - redpanda-data:/var/lib/redpanda/data   # 命名卷:避免 bind-mount 的宿主 uid 权限问题
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy.*true'"]
       interval: 10s
@@ -158,10 +158,13 @@ services:
     image: redis:7-alpine
     container_name: aiops-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"   # 宿主 6380,避免与本机已有 Redis(6379)冲突
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
+
+volumes:
+  redpanda-data:
