@@ -4,6 +4,9 @@ import type { InvestigationEvent } from '@/api/types'
 
 export type SSEStatus = 'idle' | 'connecting' | 'open' | 'closed' | 'error'
 
+// 环形缓冲上限:仅保留最近 N 条事件,避免长时间调查时事件数组无限增长撑爆内存。
+const MAX_EVENTS = 500
+
 interface UseSSEResult {
   events: InvestigationEvent[]
   status: SSEStatus
@@ -30,6 +33,9 @@ export function useSSE(
     }
 
     // EventSource 无法设置 Authorization 头,token 以查询串携带(后端支持时生效)。
+    // ⚠️ 安全取舍(本轮暂不改后端):access_token 走 query string 可能被写入
+    //    nginx/网关访问日志、浏览器历史、Referer 泄露。后续方向:后端改为基于
+    //    HttpOnly Cookie 的 SSE 鉴权,或下发短时一次性 SSE ticket 换取连接。
     const url = apiUrl(
       withTokenQuery(
         `/v1/investigations/${encodeURIComponent(investigationId)}/events`,
@@ -59,7 +65,11 @@ export function useSSE(
           ts: new Date().toISOString(),
         }
       }
-      setEvents((prev) => [...prev, parsed])
+      setEvents((prev) => {
+        const next = [...prev, parsed]
+        // 超过上限时丢弃最旧事件,保留最近 MAX_EVENTS 条(环形缓冲语义)。
+        return next.length > MAX_EVENTS ? next.slice(-MAX_EVENTS) : next
+      })
     }
 
     es.onopen = () => setStatus('open')

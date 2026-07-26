@@ -102,3 +102,202 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+# =============================================================================
+# Egress —— 出站最小化(default-deny-egress + 按组件白名单)。
+#   基础设施所在命名空间约定:data(PostgreSQL/Kafka/MinIO)、temporal(Temporal)。
+#   若实际部署命名空间不同,请同步调整下方 namespaceSelector。
+#   外部地址(模型 API、外部 S3、可观测后端)以「允许 443/指定端口 egress」表达。
+# =============================================================================
+---
+# 默认拒绝命名空间内所有出站(与下方白名单叠加放行)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# DNS:所有 Pod 均需解析(kube-dns / CoreDNS,53 UDP+TCP)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# control-plane 出站:PostgreSQL/Kafka/MinIO(data 命名空间)、Temporal(temporal 命名空间)、
+# cluster-agent(:9100,同命名空间)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-plane-egress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane
+  policyTypes:
+    - Egress
+  egress:
+    # data 命名空间:PostgreSQL 5432 / Kafka 9092 / MinIO 9000。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 9000
+    # temporal 命名空间:Temporal frontend 7233。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: temporal
+      ports:
+        - protocol: TCP
+          port: 7233
+    # 同命名空间 cluster-agent :9100。
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cluster-agent
+      ports:
+        - protocol: TCP
+          port: 9100
+---
+# ai-worker 出站:Temporal、control-plane 内部 API(:8090)、PostgreSQL、外部模型 API(443)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-worker-egress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-worker
+  policyTypes:
+    - Egress
+  egress:
+    # temporal 命名空间:Temporal frontend 7233。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: temporal
+      ports:
+        - protocol: TCP
+          port: 7233
+    # control-plane 内部 API :8090(同命名空间)。
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: control-plane
+      ports:
+        - protocol: TCP
+          port: 8090
+    # data 命名空间:PostgreSQL 5432。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+      ports:
+        - protocol: TCP
+          port: 5432
+    # 外部模型 API(Anthropic 等):放行到集群外 443。
+    # 注:ipBlock 不能与其它 to 选择器同条并列,单列一条 egress 规则。
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# cluster-agent 出站:K8s API(443)、Prometheus/Loki/Tempo(可观测,monitoring 命名空间)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-agent-egress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-agent
+  policyTypes:
+    - Egress
+  egress:
+    # Kubernetes API Server:通常 443(集群外部/内部 VIP),放行到集群外 443。
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # 可观测后端(monitoring 命名空间):Prometheus 9090 / Loki 3100 / Tempo 3200+4317。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 3100
+        - protocol: TCP
+          port: 3200
+        - protocol: TCP
+          port: 4317
+---
+# frontend 出站:仅需访问 control-plane 公共 API :8088(同命名空间反代)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-egress
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: control-plane
+      ports:
+        - protocol: TCP
+          port: 8088

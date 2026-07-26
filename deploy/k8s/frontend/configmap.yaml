@@ -15,6 +15,16 @@ data:
       root /usr/share/nginx/html;
       index index.html;
 
+      # ---- 安全响应头(全站生效)----
+      # CSP:默认仅允许自身;connect-src 放行同源 API/SSE(反代在同源 /v1/)。
+      #      接入独立网关/错误上报域名时,在 connect-src 追加来源。
+      add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+      add_header X-Frame-Options "DENY" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+      # HSTS:由 Ingress 完成 TLS 终止的 HTTPS 场景才生效(纯 HTTP 下浏览器忽略)。
+      add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
       # 本地健康检查(不依赖后端)。
       location = /healthz {
         access_log off;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AUTH_FORBIDDEN } from '@/auth/store'
+import { AUTH_FORBIDDEN, AUTH_SESSION_EXPIRED } from '@/auth/store'
 import { ShieldAlert, X } from 'lucide-react'
 
 interface ToastItem {
@@ -7,22 +7,32 @@ interface ToastItem {
   message: string
 }
 
-// 全局轻量 toast:监听 403(权限不足)事件并提示。不引入第三方库。
+// 全局轻量 toast:监听 403(权限不足)与会话过期事件并提示。不引入第三方库。
 export function ToastHost() {
   const [items, setItems] = useState<ToastItem[]>([])
 
   useEffect(() => {
-    const onForbidden = (e: Event) => {
-      const detail = (e as CustomEvent<{ message?: string }>).detail
-      const message = detail?.message || '无权限访问该资源'
+    const push = (message: string) => {
       const id = Date.now() + Math.random()
       setItems((prev) => [...prev, { id, message }])
       setTimeout(() => {
         setItems((prev) => prev.filter((t) => t.id !== id))
       }, 5000)
     }
+    const onForbidden = (e: Event) => {
+      const detail = (e as CustomEvent<{ message?: string }>).detail
+      push(detail?.message || '无权限访问该资源')
+    }
+    const onExpired = (e: Event) => {
+      const detail = (e as CustomEvent<{ message?: string }>).detail
+      push(detail?.message || '登录已过期,请重新登录')
+    }
     window.addEventListener(AUTH_FORBIDDEN, onForbidden)
-    return () => window.removeEventListener(AUTH_FORBIDDEN, onForbidden)
+    window.addEventListener(AUTH_SESSION_EXPIRED, onExpired)
+    return () => {
+      window.removeEventListener(AUTH_FORBIDDEN, onForbidden)
+      window.removeEventListener(AUTH_SESSION_EXPIRED, onExpired)
+    }
   }, [])
 
   function dismiss(id: number) {

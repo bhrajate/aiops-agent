@@ -6,7 +6,8 @@
 # 全局镜像仓库前缀与统一 tag(各组件可单独覆盖 image.tag)。
 global:
   imageRegistry: ghcr.io/aiops
-  imageTag: latest
+  # ⚠️ 禁用 latest:用固定版本 tag(不可复现/无法回滚)。dev 覆盖为 "dev"。
+  imageTag: v0.1.0
   imagePullSecrets: []
 
 nameOverride: ""
@@ -40,12 +41,14 @@ config:
   controlInternalUrlOverride: ""
 
 # ---- 敏感配置 ----
-# 生产强烈建议 externalSecret.enabled=true(由 External Secrets / Vault 注入),
-# chart 不渲染明文 Secret。仅演示/自管时用 secrets.create=true 直接注入(明文入 values,慎用)。
+# 生产强烈建议由 External Secrets / Vault 注入同名 Secret,chart 不渲染明文。
+# 默认 create=false(fail-safe):避免误将下方 CHANGE_ME 明文渲染进生产集群。
+# dev(values-dev.yaml)显式开启 create=true 注入本地弱口令;
+# 自管/演示需直接注入时,显式设 create=true 并覆盖 data 下的占位值。
 secrets:
-  create: true
-  # 若已用其它方式创建了同名 Secret,可设 create=false 并在此填名字。
-  existingSecret: ""
+  create: false
+  # create=false 时,需事先用其它方式创建同名 Secret;此处填其名字(默认 aiops-secrets)。
+  existingSecret: "aiops-secrets"
   data:
     dbDsn: "postgres://aiops:CHANGE_ME@postgres.data.svc.cluster.local:5432/aiops?sslmode=require"
     internalToken: "CHANGE_ME_internal_token"
@@ -120,6 +123,28 @@ ingress:
 # ---- 网络策略 ----
 networkPolicy:
   enabled: true
+  # Egress 白名单依赖的外部命名空间名与端口(按实际基础设施部署调整)。
+  egress:
+    # 基础设施所在命名空间(通过 kubernetes.io/metadata.name 选择)。
+    dnsNamespace: "kube-system"      # CoreDNS/kube-dns
+    dataNamespace: "data"            # PostgreSQL / Kafka / MinIO
+    temporalNamespace: "temporal"    # Temporal frontend
+    monitoringNamespace: "monitoring" # Prometheus / Loki / Tempo
+    # 端口(与 config 中地址保持一致)。
+    postgresPort: 5432
+    kafkaPort: 9092
+    minioPort: 9000
+    temporalPort: 7233
+    clusterAgentPort: 9100
+    controlInternalPort: 8090
+    controlPublicPort: 8088
+    # 外部模型 API / 外部 S3 出站端口(HTTPS)。ai-worker 需要访问外部模型服务。
+    externalHttpsPort: 443
+    # 可观测后端端口(cluster-agent 采集)。
+    prometheusPort: 9090
+    lokiPort: 3100
+    tempoHttpPort: 3200
+    tempoOtlpPort: 4317
 
 # ---- 通用调度约束 ----
 podAntiAffinity: true          # 副本跨节点(preferred)

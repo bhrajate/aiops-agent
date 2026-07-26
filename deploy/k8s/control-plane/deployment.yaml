@@ -53,7 +53,8 @@ spec:
               app.kubernetes.io/name: control-plane
       containers:
         - name: control-plane
-          image: ghcr.io/aiops/control-plane:latest
+          # ⚠️ 占位版本 tag,禁用 :latest(不可复现、无法回滚)。发布时替换为实际版本或 digest。
+          image: ghcr.io/aiops/control-plane:v0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: public

@@ -11,11 +11,19 @@ interface DemoAccount {
   desc: string
 }
 
-const DEMO_ACCOUNTS: DemoAccount[] = [
-  { username: 'alice', password: 'alice-pass', desc: 'sre · 全命名空间' },
-  { username: 'bob', password: 'bob-pass', desc: 'oncall · payment+cart' },
-  { username: 'viewer', password: 'viewer-pass', desc: 'viewer · 只读 payment' },
-]
+// 演示账号仅在开发构建注入;生产构建(import.meta.env.DEV === false)下
+// 该数组为空,配合下方条件渲染,明文凭证不会进入生产 bundle。
+const DEMO_ACCOUNTS: DemoAccount[] = import.meta.env.DEV
+  ? [
+      { username: 'alice', password: 'alice-pass', desc: 'sre · 全命名空间' },
+      { username: 'bob', password: 'bob-pass', desc: 'oncall · payment+cart' },
+      {
+        username: 'viewer',
+        password: 'viewer-pass',
+        desc: 'viewer · 只读 payment',
+      },
+    ]
+  : []
 
 const inputCls =
   'w-full rounded-md border border-surface-600 bg-surface-900 px-3 py-2 text-sm text-slate-200 outline-none focus:border-accent'
@@ -118,6 +126,7 @@ export function LoginPage() {
           </Button>
         </form>
 
+        {DEMO_ACCOUNTS.length > 0 && (
         <div className="mt-4 rounded-lg border border-surface-700 bg-surface-900/60 p-4">
           <p className="mb-2 text-xs font-medium text-slate-400">
             演示账号(点击自动填充)
@@ -139,6 +148,7 @@ export function LoginPage() {
             ))}
           </ul>
         </div>
+        )}
       </div>
     </div>
   )

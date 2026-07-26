@@ -89,4 +89,189 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+{{- $eg := .Values.networkPolicy.egress }}
+---
+# 默认拒绝所有出站(与下方白名单叠加放行)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# DNS:所有 Pod 均需解析。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.dnsNamespace }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# control-plane 出站:PostgreSQL/Kafka/MinIO、Temporal、cluster-agent。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-plane-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.dataNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ $eg.postgresPort }}
+        - protocol: TCP
+          port: {{ $eg.kafkaPort }}
+        - protocol: TCP
+          port: {{ $eg.minioPort }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.temporalNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ $eg.temporalPort }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cluster-agent
+      ports:
+        - protocol: TCP
+          port: {{ $eg.clusterAgentPort }}
+---
+# ai-worker 出站:Temporal、control-plane 内部 API、PostgreSQL、外部模型 API(443)。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-worker-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.temporalNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ $eg.temporalPort }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: control-plane
+      ports:
+        - protocol: TCP
+          port: {{ $eg.controlInternalPort }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.dataNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ $eg.postgresPort }}
+    # 外部模型 API:放行到集群外 443(排除内网段)。
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: {{ $eg.externalHttpsPort }}
+---
+# cluster-agent 出站:K8s API(443)、Prometheus/Loki/Tempo。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-agent-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cluster-agent
+  policyTypes:
+    - Egress
+  egress:
+    # Kubernetes API Server(443)。
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: {{ $eg.externalHttpsPort }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.monitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ $eg.prometheusPort }}
+        - protocol: TCP
+          port: {{ $eg.lokiPort }}
+        - protocol: TCP
+          port: {{ $eg.tempoHttpPort }}
+        - protocol: TCP
+          port: {{ $eg.tempoOtlpPort }}
+---
+# frontend 出站:仅访问 control-plane 公共 API :8088。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aiops.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: control-plane
+      ports:
+        - protocol: TCP
+          port: {{ $eg.controlPublicPort }}
 {{- end }}
