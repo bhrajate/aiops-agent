@@ -293,7 +293,15 @@ class InvestigationActivities:
     @activity.defn
     async def record_event(self, arg: EventInput) -> None:
         client = self._client(arg.control_internal_url)
-        await client.emit_event(arg.investigation_id, arg.event_type, arg.payload)
+        # Idempotency key is derived from Temporal identifiers that stay STABLE
+        # across activity retries (workflow_id + activity_id) -- NOT a fresh
+        # uuid4, which would differ per attempt and defeat dedup. This must be
+        # generated inside the activity (workflow code must stay deterministic).
+        info = activity.info()
+        idem = f"{info.workflow_id}:{info.activity_id}"
+        await client.emit_event(
+            arg.investigation_id, arg.event_type, arg.payload, idempotency_key=idem
+        )
 
     @activity.defn
     async def record_usage(self, arg: UsageInput) -> None:

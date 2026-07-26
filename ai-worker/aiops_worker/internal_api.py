@@ -89,11 +89,21 @@ class InternalAPIClient:
         )
 
     async def emit_event(
-        self, investigation_id: str, event_type: str, payload: dict[str, Any]
+        self,
+        investigation_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        idempotency_key: str = "",
     ) -> None:
+        # ``idempotency_key`` lets the control plane dedupe events replayed by
+        # Temporal activity retries (same logical event -> same key). If the
+        # control plane does not yet dedupe, the field is harmless.
+        body: dict[str, Any] = {"event_type": event_type, "payload": payload}
+        if idempotency_key:
+            body["idempotency_key"] = idempotency_key
         await self._post(
             f"/internal/investigations/{investigation_id}/events",
-            {"event_type": event_type, "payload": payload},
+            body,
         )
 
     async def put_hypotheses(

@@ -37,6 +37,8 @@ with workflow.unsafe.imports_passed_through():
         UsageInput,
     )
     from .contracts import (
+        ANALYZER_TOOLS,
+        AnalyzerSpec,
         Budget,
         Evidence,
         IncidentContext,
@@ -51,6 +53,42 @@ with workflow.unsafe.imports_passed_through():
 _MODEL_TIMEOUT = timedelta(seconds=90)
 _IO_TIMEOUT = timedelta(seconds=30)
 _RETRY = RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=1))
+
+
+def _clip_analyzers_to_budget(
+    analyzers: list["AnalyzerSpec"], remaining: int
+) -> list["AnalyzerSpec"]:
+    """Clip a round's analyzers so their total tool invocations fit ``remaining``
+    tool-call budget. Pure/deterministic: iterates analyzers in plan order and
+    counts only allow-listed tools (the same set the activity would invoke).
+
+    An analyzer that fully fits is kept as-is; the analyzer that straddles the
+    limit is kept with its tool list truncated; everything after is dropped.
+    This makes ``max_tool_calls`` an *ex-ante* barrier, not an after-the-fact
+    check between rounds.
+    """
+    if remaining <= 0:
+        return []
+    clipped: list[AnalyzerSpec] = []
+    used = 0
+    for spec in analyzers:
+        # Only allow-listed tools actually cost a tool call (activities skip the
+        # rest); dedupe-preserving order to mirror the activity's behavior.
+        allowed = ANALYZER_TOOLS.get(spec.analyzer, ())
+        effective = [t for t in spec.tools if t in allowed]
+        if not effective:
+            continue
+        room = remaining - used
+        if room <= 0:
+            break
+        if len(effective) <= room:
+            clipped.append(spec.model_copy(update={"tools": effective}))
+            used += len(effective)
+        else:
+            clipped.append(spec.model_copy(update={"tools": effective[:room]}))
+            used += room
+            break
+    return clipped
 
 
 @workflow.defn(name="InvestigationWorkflow")
@@ -233,18 +271,24 @@ class InvestigationWorkflow:
         last_synthesis: Optional[SynthesisResult] = None
         round_index = 0
 
+        # ``round_index`` counts COMPLETED collection rounds. With
+        # ``max_rounds=N`` the loop runs exactly N collection rounds (the round
+        # counter is advanced at the END of a round, so N=3 no longer silently
+        # runs only 2 rounds). The between-round budget check below is a
+        # backstop; the authoritative round guard is after the increment.
         while True:
-            self._usage.rounds = round_index + 1
+            if self._should_cancel():
+                return await self._finish_cancelled(inp)
             stop = self._budget_stop(budget)
             if stop is not None:
                 escalation_reason = f"budget_exhausted:{stop}"
                 break
-            if self._should_cancel():
-                return await self._finish_cancelled(inp)
 
             # planning/collecting -> collecting
             await self._transition(inp, Phase.COLLECTING)
-            all_evidence, analyzer_results = await self._collect(inp, context, plan)
+            all_evidence, analyzer_results = await self._collect(
+                inp, context, plan, budget
+            )
 
             if self._should_cancel():
                 return await self._finish_cancelled(inp)
@@ -273,6 +317,10 @@ class InvestigationWorkflow:
                 syn_out.usage.total_tokens, syn_out.usage.cost_usd
             )
             last_synthesis = syn_out.synthesis
+
+            # This collection round is now complete -- account for it.
+            round_index += 1
+            self._usage.rounds = round_index
             await self._flush_usage(inp)
 
             if syn_out.synthesis.has_supported_conclusion:
@@ -289,7 +337,6 @@ class InvestigationWorkflow:
                 escalation_reason = "no_actionable_next_query"
                 break
 
-            round_index += 1
             if round_index >= budget.max_rounds:
                 escalation_reason = "budget_exhausted:max_rounds"
                 break
@@ -316,7 +363,7 @@ class InvestigationWorkflow:
     # -- collection (parallel analyzers + runbooks) --------------------------
 
     async def _collect(
-        self, inp: WorkflowInput, context: IncidentContext, plan
+        self, inp: WorkflowInput, context: IncidentContext, plan, budget: Budget
     ) -> tuple[list[Evidence], list]:
         scope = {"cluster_id": inp.cluster_id, "tenant_id": inp.tenant_id}
 
@@ -334,9 +381,18 @@ class InvestigationWorkflow:
                 retry_policy=_RETRY,
             )
 
+        # Pre-emptive guardrail (architecture 8.4): clip this round's analyzers +
+        # per-analyzer tools to the tool-call budget BEFORE dispatching anything,
+        # so a single round cannot blow past max_tool_calls. Deterministic --
+        # depends only on the current usage and the (deterministic) plan order.
+        specs = _clip_analyzers_to_budget(
+            plan.analyzers, remaining=budget.max_tool_calls - self._usage.tool_calls
+        )
+
         # Analyzers run in parallel (architecture 8.2). Each is its own
         # activity; Temporal patches asyncio so asyncio.gather stays
-        # deterministic inside a workflow.
+        # deterministic inside a workflow. The clipped tool count bounds the
+        # number of model calls, which in turn bounds per-round token/cost.
         futures = [
             workflow.execute_activity_method(
                 InvestigationActivities.run_analyzer,
@@ -351,7 +407,7 @@ class InvestigationWorkflow:
                 start_to_close_timeout=_MODEL_TIMEOUT,
                 retry_policy=_RETRY,
             )
-            for spec in plan.analyzers
+            for spec in specs
         ]
         results: list[RunAnalyzerOutput] = list(await asyncio.gather(*futures))
 

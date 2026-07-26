@@ -61,8 +61,8 @@ class FakeInternalClient:
     async def set_phase(self, investigation_id, phase):
         self.phases.append(phase)
 
-    async def emit_event(self, investigation_id, event_type, payload):
-        self.events.append((event_type, payload))
+    async def emit_event(self, investigation_id, event_type, payload, idempotency_key=""):
+        self.events.append((event_type, payload, idempotency_key))
 
     async def put_hypotheses(self, investigation_id, hypotheses):
         self.hypotheses = hypotheses
