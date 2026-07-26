@@ -34,12 +34,25 @@ func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]a
 	if strings.TrimSpace(svc) == "" {
 		svc = liveResource(scope)
 	}
+	// Isolation (parity with Prometheus/Loki): validate the caller-supplied
+	// service name and always constrain the search to the scope namespace so a
+	// caller cannot read other tenants' traces by overriding "service".
+	if err := validateDNS1123("service", svc); err != nil {
+		return Result{}, fmt.Errorf("get_traces scope: %w", err)
+	}
+	namespace := ns(scope)
+	if err := validateDNS1123("namespace", namespace); err != nil {
+		return Result{}, fmt.Errorf("get_traces scope: %w", err)
+	}
 
 	q := url.Values{}
+	// Force the namespace tag; add service.name when known. url.Values.Encode
+	// escapes the values, and DNS-1123 validation above blocks tag-syntax breakout.
+	tags := "k8s.namespace.name=" + namespace
 	if svc != "" {
-		// Tempo tag selector for the service name.
-		q.Set("tags", "service.name="+svc)
+		tags += " service.name=" + svc
 	}
+	q.Set("tags", tags)
 	q.Set("start", strconv.FormatInt(from.Unix(), 10))
 	q.Set("end", strconv.FormatInt(to.Unix(), 10))
 	q.Set("limit", "20")

@@ -70,8 +70,9 @@ func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[strin
 		expr = defaultLiveMetricExpr(namespace, resource)
 	} else {
 		// Caller-supplied expr: force the namespace matcher into every selector
+		// (AST-level, so bare selectors like `... or up` cannot escape the scope)
 		// and reject any cross-namespace reference.
-		scoped, err := injectNamespaceMatchers(expr, namespace)
+		scoped, err := scopePromQL(expr, namespace)
 		if err != nil {
 			return Result{}, fmt.Errorf("query_metrics scope: %w", err)
 		}

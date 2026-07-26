@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/promql/parser"
 )
 
 // dns1123Subdomain matches a Kubernetes DNS-1123 subdomain (namespaces and
@@ -32,6 +35,40 @@ func validateDNS1123(kind, name string) error {
 		return fmt.Errorf("%s %q 不是合法的 DNS-1123 名称", kind, name)
 	}
 	return nil
+}
+
+// scopePromQL enforces single-namespace isolation on a PromQL expression at the
+// AST level (robust against bare-selector bypass such as `up{namespace="x"} or up`).
+// Every VectorSelector gets namespace="<ns>" injected; a selector already pinning
+// a *different* namespace (or a non-exact namespace matcher) is rejected.
+func scopePromQL(expr, ns string) (string, error) {
+	e, err := parser.NewParser(parser.Options{}).ParseExpr(expr)
+	if err != nil {
+		return "", fmt.Errorf("查询表达式非法 PromQL: %w", err)
+	}
+	var vErr error
+	parser.Inspect(e, func(node parser.Node, _ []parser.Node) error {
+		vs, ok := node.(*parser.VectorSelector)
+		if !ok {
+			return nil
+		}
+		for _, m := range vs.LabelMatchers {
+			if m.Name != "namespace" {
+				continue
+			}
+			if m.Type != labels.MatchEqual || m.Value != ns {
+				vErr = fmt.Errorf("查询跨 namespace(仅允许 namespace=%q)", ns)
+			}
+			return nil // already scoped to ns
+		}
+		vs.LabelMatchers = append(vs.LabelMatchers,
+			&labels.Matcher{Type: labels.MatchEqual, Name: "namespace", Value: ns})
+		return nil
+	})
+	if vErr != nil {
+		return "", vErr
+	}
+	return e.String(), nil
 }
 
 // injectNamespaceMatchers rewrites a PromQL/LogQL expression so that every
