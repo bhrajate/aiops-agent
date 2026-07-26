@@ -25,15 +25,23 @@ func main() {
 	addr := env("AIOPS_CLUSTER_AGENT_ADDR", ":9100")
 	clusterID := env("AIOPS_CLUSTER_ID", "prod-cn-1")
 
-	// First version: deterministic Mock DataSource. Swap here for a real
-	// client-go / Prometheus / Loki / Tempo backed source in the future.
-	ds := datasource.NewMock()
+	// Pluggable read-only data source. AIOPS_DATASOURCE selects mock (default)
+	// or live (client-go / Prometheus / Loki / Tempo). Live degrades per-tool
+	// when an upstream URL or the Kubernetes client is not configured.
+	ds, mode := datasource.FromEnv()
 	reg := tools.NewRegistry(ds)
 	srv := server.New(clusterID, reg, log)
+
+	tlsCfg, err := server.TLSConfigFromEnv().Build()
+	if err != nil {
+		log.Error("invalid mTLS configuration", "err", err)
+		os.Exit(1)
+	}
 
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           srv.Handler(),
+		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -41,9 +49,19 @@ func main() {
 	}
 
 	go func() {
-		log.Info("cluster-agent starting", "addr", addr, "cluster_id", clusterID, "datasource", "mock", "mode", "read-only")
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("server failed", "err", err)
+		tlsEnabled := tlsCfg != nil
+		log.Info("cluster-agent starting",
+			"addr", addr, "cluster_id", clusterID, "datasource", mode,
+			"mode", "read-only", "mtls", tlsEnabled)
+		var serveErr error
+		if tlsEnabled {
+			// Certs/keys already loaded into TLSConfig; pass empty paths.
+			serveErr = httpSrv.ListenAndServeTLS("", "")
+		} else {
+			serveErr = httpSrv.ListenAndServe()
+		}
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			log.Error("server failed", "err", serveErr)
 			os.Exit(1)
 		}
 	}()

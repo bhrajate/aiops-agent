@@ -4,8 +4,8 @@
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 
-# Cache module downloads (no external deps today, but keeps layering correct).
-COPY go.mod ./
+# Cache module downloads (client-go and transitive deps).
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
