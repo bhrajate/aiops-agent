@@ -13,6 +13,12 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.39"]
+# Observability (architecture §16): only needed when AIOPS_OTLP_ENDPOINT is set.
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
+    "temporalio[opentelemetry]>=1.7",
+]
 # Database access for the Evaluation service (evaluation_runs) and pgvector
 # semantic RAG (knowledge_items). Optional: the mock embedding provider and all
 # unit tests run without a real DB.

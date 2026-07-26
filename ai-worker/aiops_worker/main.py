@@ -16,6 +16,7 @@ from temporalio.worker import Worker
 from .activities import InvestigationActivities
 from .config import load_settings
 from .model_gateway import build_provider
+from .telemetry import build_interceptors
 from .workflow import InvestigationWorkflow
 
 logger = logging.getLogger("aiops_worker")
@@ -39,9 +40,11 @@ async def run_worker() -> None:
     )
 
     acts = InvestigationActivities(provider, http_timeout_sec=settings.http_timeout_sec)
+    interceptors = build_interceptors(settings.otlp_endpoint, settings.service_name)
     worker = Worker(
         client,
         task_queue=settings.task_queue,
+        interceptors=interceptors,
         workflows=[InvestigationWorkflow],
         activities=[
             acts.load_incident_context,

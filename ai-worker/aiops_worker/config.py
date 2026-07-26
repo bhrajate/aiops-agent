@@ -32,6 +32,10 @@ class Settings:
     # Analyzer concurrency ceiling (architecture doc 8.4).
     max_analyzer_concurrency: int = int(os.environ.get("AIOPS_MAX_ANALYZER_CONCURRENCY", "3"))
 
+    # Observability (architecture §16): OTLP endpoint (host:port). Empty = disabled.
+    otlp_endpoint: str = os.environ.get("AIOPS_OTLP_ENDPOINT", "")
+    service_name: str = os.environ.get("AIOPS_SERVICE_NAME", "aiops-ai-worker")
+
 
 def load_settings() -> Settings:
     """Build a fresh Settings snapshot from the current environment."""

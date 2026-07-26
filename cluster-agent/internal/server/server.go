@@ -19,6 +19,7 @@ type Server struct {
 	reg       *tools.Registry
 	log       *slog.Logger
 	mux       *http.ServeMux
+	metrics   *metrics
 }
 
 // New constructs a Server. clusterID is the default cluster id injected when a
@@ -27,7 +28,7 @@ func New(clusterID string, reg *tools.Registry, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{clusterID: clusterID, reg: reg, log: log, mux: http.NewServeMux()}
+	s := &Server{clusterID: clusterID, reg: reg, log: log, mux: http.NewServeMux(), metrics: newMetrics()}
 	s.routes()
 	return s
 }
@@ -39,6 +40,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /tools", s.handleListTools)
 	s.mux.HandleFunc("POST /tools/{tool_name}", s.handleInvoke)
+	s.mux.Handle("GET /metrics", s.metrics.handler()) // 架构 §16
 }
 
 // toolRequest is the POST /tools/{tool_name} body.
@@ -78,15 +80,20 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	res, err := s.reg.Invoke(r.Context(), name, req.Scope, req.Arguments)
+	elapsed := time.Since(start).Seconds()
 	if err != nil {
 		if _, ok := err.(tools.ErrUnknownTool); ok {
+			s.metrics.observe(name, "unknown", elapsed)
 			writeError(w, http.StatusNotFound, "unknown_tool", err.Error())
 			return
 		}
+		s.metrics.observe(name, "error", elapsed)
 		writeError(w, http.StatusInternalServerError, "tool_error", err.Error())
 		return
 	}
+	s.metrics.observe(name, "ok", elapsed)
 	writeJSON(w, http.StatusOK, res)
 }
 
