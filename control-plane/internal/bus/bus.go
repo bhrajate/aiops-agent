@@ -95,44 +95,46 @@ func (c *Consumer) RunWithOptions(ctx context.Context, h Handler, opts RunOption
 			}
 		}
 
-		// 就地有界重试同一条消息
+		// 就地有界重试同一条消息。绝不在当前消息"未处理"时 fetch 下一条——
+		// kafka-go 累积提交会把 offset 推过未处理消息,导致静默丢失(违反 at-least-once)。
 		attempt := 0
-		handled := false
+		aborted := false
 		for {
 			if herr := h(ctx, m.Key, m.Value); herr == nil {
-				handled = true
-				break
+				break // 处理成功
 			} else {
 				attempt++
 				if opts.MaxAttempts > 0 && attempt >= opts.MaxAttempts {
-					// 超上限:投 DLQ。DLQ 成功才提交跳过(避免毒消息卡住分区);
-					// DLQ 失败则不提交,靠外层重新 fetch(offset 未提交)重来。
+					// 超上限:投 DLQ。DLQ 落库失败时**原地无限重试落库**(带退避),
+					// 直到成功或 ctx 取消——不 fetch 下一条,避免累积提交跳过本消息。
 					if opts.OnDeadLetter != nil {
-						if dlErr := opts.OnDeadLetter(ctx, opts.Topic, string(m.Key), m.Value, herr, attempt); dlErr != nil {
-							break // 未 handled,不提交
+						dlAttempt := 0
+						for {
+							if dlErr := opts.OnDeadLetter(ctx, opts.Topic, string(m.Key), m.Value, herr, attempt); dlErr == nil {
+								break
+							}
+							dlAttempt++
+							select {
+							case <-ctx.Done():
+								return nil
+							case <-time.After(backoffFor(dlAttempt, backoff, maxBackoff)):
+							}
 						}
 					}
-					handled = true // 已 DLQ,可提交跳过
-					break
+					break // 已 DLQ(或无 DLQ 回调),可提交跳过
 				}
 				// 退避后重试同一条(ctx 可中断)
 				select {
 				case <-ctx.Done():
-					return nil
+					aborted = true
 				case <-time.After(backoffFor(attempt, backoff, maxBackoff)):
+				}
+				if aborted {
+					return nil
 				}
 			}
 		}
 
-		if !handled {
-			// DLQ 也失败:不提交,短暂等待后由外层重新处理(至少一次)
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(backoff):
-			}
-			continue
-		}
 		if err := c.reader.CommitMessages(ctx, m); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil

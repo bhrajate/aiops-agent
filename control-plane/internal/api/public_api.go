@@ -27,21 +27,23 @@ type Signaler interface {
 
 // PublicAPI 面向前端与外部 webhook。
 type PublicAPI struct {
-	store      *store.Store
-	ingress    *Ingress
-	orch       *trigger.Orchestrator
-	tempo      Signaler
-	authn      *auth.Authenticator
-	devUsers   map[string]auth.DevUser
-	agentScope auth.AgentServiceScope
-	log        *slog.Logger
+	store       *store.Store
+	ingress     *Ingress
+	orch        *trigger.Orchestrator
+	tempo       Signaler
+	authn       *auth.Authenticator
+	devUsers    map[string]auth.DevUser
+	agentScope  auth.AgentServiceScope
+	corsOrigins []string
+	log         *slog.Logger
 }
 
 func NewPublicAPI(s *store.Store, ingress *Ingress, orch *trigger.Orchestrator, tempo Signaler,
-	authn *auth.Authenticator, agentScope auth.AgentServiceScope, log *slog.Logger) *PublicAPI {
+	authn *auth.Authenticator, agentScope auth.AgentServiceScope, corsOrigins []string, log *slog.Logger) *PublicAPI {
 	return &PublicAPI{
 		store: s, ingress: ingress, orch: orch, tempo: tempo,
-		authn: authn, devUsers: auth.DefaultDevUsers(), agentScope: agentScope, log: log,
+		authn: authn, devUsers: auth.DefaultDevUsers(), agentScope: agentScope,
+		corsOrigins: corsOrigins, log: log,
 	}
 }
 
@@ -75,7 +77,7 @@ func (a *PublicAPI) Routes() http.Handler {
 		p := r.URL.Path
 		return p == "/healthz" || p == "/v1/auth/login" || p == "/v1/signals"
 	}
-	return httpx.CORS(httpx.Logging(a.log, a.authn.Middleware(skip, mux)))
+	return httpx.CORS(a.corsOrigins, httpx.Logging(a.log, a.authn.Middleware(skip, mux)))
 }
 
 // --- 认证端点 ---
@@ -239,10 +241,14 @@ func (a *PublicAPI) getInvestigation(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
 		return
 	}
-	if inc, e := a.store.GetIncident(r.Context(), inv.IncidentID); e == nil {
-		if !a.authorizeIncident(w, r, inc, auth.ActionReadIncident) {
-			return
-		}
+	// fail-closed:无法解析 incident 范围则拒绝(不可 fail-open)
+	inc, e := a.store.GetIncident(r.Context(), inv.IncidentID)
+	if e != nil {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "cannot resolve incident scope")
+		return
+	}
+	if !a.authorizeIncident(w, r, inc, auth.ActionReadIncident) {
+		return
 	}
 	hyps, _ := a.store.ListHypotheses(r.Context(), inv.InvestigationID)
 	evs, _ := a.store.ListEvidenceByInvestigation(r.Context(), inv.InvestigationID)
@@ -261,13 +267,19 @@ func (a *PublicAPI) getEvidence(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "evidence not found")
 		return
 	}
-	// 经证据所属调查的 Incident 做 ABAC
-	if inv, e := a.store.GetInvestigation(r.Context(), ev.InvestigationID); e == nil {
-		if inc, e2 := a.store.GetIncident(r.Context(), inv.IncidentID); e2 == nil {
-			if !a.authorizeIncident(w, r, inc, auth.ActionReadEvidence) {
-				return
-			}
-		}
+	// 经证据所属调查的 Incident 做 ABAC(fail-closed)
+	inv, e := a.store.GetInvestigation(r.Context(), ev.InvestigationID)
+	if e != nil {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "cannot resolve evidence scope")
+		return
+	}
+	inc, e2 := a.store.GetIncident(r.Context(), inv.IncidentID)
+	if e2 != nil {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "cannot resolve incident scope")
+		return
+	}
+	if !a.authorizeIncident(w, r, inc, auth.ActionReadEvidence) {
+		return
 	}
 	httpx.JSON(w, http.StatusOK, ev)
 }

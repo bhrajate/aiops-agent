@@ -15,8 +15,19 @@ import (
 // streamEvents 通过 SSE 推送调查时间线(文档 17.2)。数据库是事实源,SSE 只做增量推送。
 func (a *PublicAPI) streamEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := a.store.GetInvestigation(r.Context(), id); err != nil {
+	inv, err := a.store.GetInvestigation(r.Context(), id)
+	if err != nil {
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
+		return
+	}
+	// 授权(修复 IDOR):SSE 时间线含证据/假设/诊断,必须与 getInvestigation 一致做
+	// RBAC + ABAC。fail-closed:incident 读取失败则拒绝,不开流。
+	inc, e := a.store.GetIncident(r.Context(), inv.IncidentID)
+	if e != nil {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "cannot resolve incident scope")
+		return
+	}
+	if !a.authorizeIncident(w, r, inc, auth.ActionReadIncident) {
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -90,10 +101,14 @@ func (a *PublicAPI) cancelInvestigation(w http.ResponseWriter, r *http.Request) 
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
 		return
 	}
-	if inc, e := a.store.GetIncident(r.Context(), inv.IncidentID); e == nil {
-		if !a.authorizeIncident(w, r, inc, auth.ActionCancelInvestig) {
-			return
-		}
+	// fail-closed:无法解析 incident 范围则拒绝(取消是写操作,不可 fail-open)
+	inc, e := a.store.GetIncident(r.Context(), inv.IncidentID)
+	if e != nil {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "cannot resolve incident scope")
+		return
+	}
+	if !a.authorizeIncident(w, r, inc, auth.ActionCancelInvestig) {
+		return
 	}
 	if a.tempo != nil && inv.WorkflowID != "" {
 		if err := a.tempo.Cancel(r.Context(), inv.WorkflowID); err != nil {
@@ -133,10 +148,14 @@ func (a *PublicAPI) postFeedback(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "investigation not found")
 		return
 	}
-	if inc, e := a.store.GetIncident(r.Context(), inv.IncidentID); e == nil {
-		if !a.authorizeIncident(w, r, inc, auth.ActionFeedback) {
-			return
-		}
+	// fail-closed:反馈可 close incident,是写操作,不可 fail-open
+	inc, e := a.store.GetIncident(r.Context(), inv.IncidentID)
+	if e != nil {
+		httpx.Error(w, http.StatusForbidden, "forbidden", "cannot resolve incident scope")
+		return
+	}
+	if !a.authorizeIncident(w, r, inc, auth.ActionFeedback) {
+		return
 	}
 	fb, err := a.store.InsertFeedback(r.Context(), model.Feedback{
 		InvestigationID:    id,

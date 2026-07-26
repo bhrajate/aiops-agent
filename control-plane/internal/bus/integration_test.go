@@ -77,6 +77,46 @@ func TestIntegration_RetryThenSucceed_NoSkip(t *testing.T) {
 	}
 }
 
+func TestIntegration_DeadLetterWriteFailure_Retries_NoSkip(t *testing.T) {
+	// High-2 回归:DLQ 落库先失败几次再成功 —— 消息不得被跳过/提交,
+	// 必须原地重试 DLQ 直到成功。用两条消息:若第一条被错误跳过,
+	// 第二条会先于第一条完成 DLQ,顺序即被破坏。
+	bs := brokers(t)
+	topic := uniqueTopic("test-dlq-retry")
+	produce(t, bs, topic, 1)
+
+	c := NewConsumer(bs, topic, "test-dlq-retry-grp")
+	defer c.Close()
+
+	handler := func(ctx context.Context, key, value []byte) error {
+		return fmt.Errorf("always fail") // 恒失败 → 走 DLQ
+	}
+	var dlqCalls, dlqOK int32
+	dlq := func(ctx context.Context, tp, key string, v []byte, lastErr error, attempts int) error {
+		n := atomic.AddInt32(&dlqCalls, 1)
+		if n < 3 { // 前两次 DLQ 落库失败
+			return fmt.Errorf("dlq store transient failure %d", n)
+		}
+		atomic.AddInt32(&dlqOK, 1) // 第三次成功
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go c.RunWithOptions(ctx, handler, RunOptions{Topic: topic, MaxAttempts: 2, OnDeadLetter: dlq})
+
+	deadline := time.After(25 * time.Second)
+	for atomic.LoadInt32(&dlqOK) < 1 {
+		select {
+		case <-deadline:
+			t.Fatalf("DLQ 落库失败后未原地重试到成功,dlqCalls=%d(消息可能被静默跳过)", atomic.LoadInt32(&dlqCalls))
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if atomic.LoadInt32(&dlqCalls) < 3 {
+		t.Fatalf("期望 DLQ 至少重试到第 3 次,got %d", atomic.LoadInt32(&dlqCalls))
+	}
+}
+
 func TestIntegration_ExhaustToDeadLetter(t *testing.T) {
 	bs := brokers(t)
 	topic := uniqueTopic("test-dlq")

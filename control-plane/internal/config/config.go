@@ -65,6 +65,9 @@ type Config struct {
 	// 可观测性(架构第 16 节)
 	ServiceName  string
 	OTLPEndpoint string // 为空则不导出 trace(仍可埋点)
+
+	// CORS 允许的前端源(逗号分隔);为空则仅放行 localhost 开发源
+	CORSOrigins []string
 }
 
 func getenv(key, def string) string {
@@ -137,7 +140,22 @@ func Load() Config {
 
 		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),
+		CORSOrigins:  splitNonEmpty(getenv("AIOPS_CORS_ORIGINS", "")),
 	}
+}
+
+func splitNonEmpty(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // IsProduction 报告是否处于生产模式(触发严格校验)。

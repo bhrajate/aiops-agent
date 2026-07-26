@@ -138,7 +138,7 @@ func main() {
 	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, metrics, log)
 
 	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
-	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, log)
+	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, cfg.CORSOrigins, log)
 	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, cfg.IsProduction(), metrics.Handler(), log)
 
 	outboxPub := outbox.New(st, publisher, cfg.MaxDeliveryAttempts, log)

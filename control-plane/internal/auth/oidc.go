@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"sync"
@@ -22,21 +23,25 @@ type JWKSVerifier struct {
 	audience string
 	http     *http.Client
 
-	mu      sync.RWMutex
-	keys    map[string]*rsa.PublicKey
-	fetched time.Time
-	ttl     time.Duration
+	mu          sync.RWMutex
+	keys        map[string]*rsa.PublicKey
+	fetched     time.Time
+	ttl         time.Duration
+	lastRefresh time.Time     // 最近一次(含失败)刷新时间,用于节流
+	minInterval time.Duration // 未知 kid 触发刷新的最小间隔(防 DoS 放大)
+	refreshing  bool          // singleflight:同一时刻只允许一个刷新
 }
 
 // NewJWKSVerifier 创建验证器。issuer/audience 为空表示不校验对应 claim(不推荐)。
 func NewJWKSVerifier(jwksURL, issuer, audience string) *JWKSVerifier {
 	return &JWKSVerifier{
-		jwksURL:  jwksURL,
-		issuer:   issuer,
-		audience: audience,
-		http:     &http.Client{Timeout: 5 * time.Second},
-		keys:     map[string]*rsa.PublicKey{},
-		ttl:      10 * time.Minute,
+		jwksURL:     jwksURL,
+		issuer:      issuer,
+		audience:    audience,
+		http:        &http.Client{Timeout: 5 * time.Second},
+		keys:        map[string]*rsa.PublicKey{},
+		ttl:         10 * time.Minute,
+		minInterval: 30 * time.Second, // 未知 kid 最多每 30s 拉一次 IdP
 	}
 }
 
@@ -64,7 +69,8 @@ func (v *JWKSVerifier) refresh(ctx context.Context) error {
 	var doc struct {
 		Keys []jwk `json:"keys"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+	// 限制 JWKS 响应大小,防止恶意/异常 IdP 返回超大 body 打爆内存
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
 		return err
 	}
 	keys := make(map[string]*rsa.PublicKey, len(doc.Keys))
@@ -105,12 +111,44 @@ func (v *JWKSVerifier) keyForKid(ctx context.Context, kid string) (*rsa.PublicKe
 	v.mu.RLock()
 	pk, ok := v.keys[kid]
 	stale := time.Since(v.fetched) > v.ttl
+	throttled := time.Since(v.lastRefresh) < v.minInterval
+	refreshing := v.refreshing
 	v.mu.RUnlock()
 	if ok && !stale {
 		return pk, nil
 	}
-	// 未命中或过期:刷新一次
-	if err := v.refresh(ctx); err != nil && !ok {
+	// 未命中或过期:节流刷新,防止随机 kid token 每请求打一次 IdP(DoS 放大)。
+	// 距上次刷新不足 minInterval,或已有刷新在途 → 直接用当前缓存判定,不再拉取。
+	if throttled || refreshing {
+		if !ok {
+			return nil, fmt.Errorf("unknown kid %q (jwks refresh throttled)", kid)
+		}
+		return pk, nil
+	}
+
+	v.mu.Lock()
+	// 双检:可能在等锁期间已有别的 goroutine 刷新
+	if v.refreshing || time.Since(v.lastRefresh) < v.minInterval {
+		v.mu.Unlock()
+		v.mu.RLock()
+		pk, ok = v.keys[kid]
+		v.mu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("unknown kid %q (jwks refresh in-flight)", kid)
+		}
+		return pk, nil
+	}
+	v.refreshing = true
+	v.lastRefresh = time.Now()
+	v.mu.Unlock()
+
+	err := v.refresh(ctx)
+
+	v.mu.Lock()
+	v.refreshing = false
+	v.mu.Unlock()
+
+	if err != nil && !ok {
 		return nil, err
 	}
 	v.mu.RLock()
@@ -131,7 +169,8 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (Principal, error
 		}
 		kid, _ := t.Header["kid"].(string)
 		return v.keyForKid(ctx, kid)
-	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience))
+	}, jwt.WithIssuer(v.issuer), jwt.WithAudience(v.audience),
+		jwt.WithValidMethods([]string{"RS256"}), jwt.WithLeeway(60*time.Second))
 	if err != nil {
 		return Principal{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
 	}

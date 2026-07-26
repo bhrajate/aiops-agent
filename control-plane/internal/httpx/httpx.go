@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 func JSON(w http.ResponseWriter, status int, v any) {
@@ -39,12 +40,37 @@ func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// CORS 开发期允许前端跨域(生产由网关处理)。
-func CORS(next http.Handler) http.Handler {
+// CORS 按 origin 白名单放行(Bearer 鉴权下不可用 `*` + 凭证)。
+// allowed 为空时:仅放行 localhost 开发源(不使用通配)。生产应显式配置。
+func CORS(allowed []string, next http.Handler) http.Handler {
+	set := make(map[string]bool, len(allowed))
+	for _, o := range allowed {
+		if o = strings.TrimSpace(o); o != "" {
+			set[o] = true
+		}
+	}
+	isAllowed := func(origin string) bool {
+		if origin == "" {
+			return false
+		}
+		if set[origin] {
+			return true
+		}
+		// 无显式配置时,仅默认放行本地开发源
+		if len(set) == 0 {
+			return strings.HasPrefix(origin, "http://localhost:") ||
+				strings.HasPrefix(origin, "http://127.0.0.1:")
+		}
+		return false
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,Authorization")
+		origin := r.Header.Get("Origin")
+		if isAllowed(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Idempotency-Key,Authorization")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

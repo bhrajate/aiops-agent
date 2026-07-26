@@ -87,6 +87,7 @@ type InvokeResult struct {
 
 // Invoke 执行工具:授权 → 范围注入 → schema 校验 → 调用数据源 → 脱敏 → 持久化 Evidence → 审计。
 func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error) {
+	// tenant 先用缺省,解析出 investigation 后改用其真实 tenant(多租户隔离)
 	tenant := "default"
 
 	// 1) 工具白名单
@@ -100,6 +101,9 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 	if err != nil {
 		g.deny(ctx, tenant, req, "investigation_not_found")
 		return InvokeResult{Status: "denied", Reason: "investigation_not_found"}, nil
+	}
+	if inv.TenantID != "" {
+		tenant = inv.TenantID // 用调查真实租户记录证据与审计
 	}
 	inc, err := g.store.GetIncident(ctx, inv.IncidentID)
 	if err != nil {
