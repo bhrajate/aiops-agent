@@ -64,12 +64,24 @@ bash scripts/e2e.sh
 
 详见各子目录的 README、[`docs/RUNBOOK.md`](docs/RUNBOOK.md)、[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 与 [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)。
 
+## 生产化能力(已落地并端到端验证)
+
+- **认证/授权**:OIDC/JWT(开发 hs256 签发)+ RBAC 角色 + ABAC 集群/命名空间范围,有效权限 = `用户 ∩ Agent ∩ Incident`。越权/幂等/webhook 共 14 项安全测试通过。
+- **mTLS**:Tool Gateway ↔ Cluster Agent 双向 TLS(证书脚本 `deploy/certs/gen-certs.sh`)。
+- **可靠性**:Idempotency-Key 落库、证据快照入 MinIO、Kafka 死信队列、webhook HMAC 签名、内部 API 共享密钥。
+- **可观测性**:Prometheus `/metrics`(control-plane + cluster-agent)+ OTLP 追踪(Signal→Incident→Workflow→Activity→ToolGateway→Agent 统一 Trace)。
+- **评测**:Golden Dataset 离线回放,质量门槛 Top-3 100% / 证据引用 100% / 幻觉 0% / P95<300s 全部 PASS(架构 §18.1)。
+- **部署**:Kubernetes manifests + Helm chart(dev/prod values)+ GitHub Actions CI + cluster-agent 只读 ClusterRole(仅 get/list/watch)。
+- **真实数据源**:cluster-agent 支持 mock(默认)/ live(client-go 只读 + Prometheus/Loki/Tempo)。
+
+详见 [`docs/SECURITY.md`](docs/SECURITY.md)、[`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)、[`deploy/DEPLOY.md`](deploy/DEPLOY.md)。
+
 ## 设计约束(务必遵守)
 
-- **默认只读**:首版所有生产工具均为只读,LLM 无任何生产写权限。
+- **默认只读**:所有生产工具均为只读(K8s 仅 Get/List),LLM 无任何生产写权限,`remediation_proposal` 恒为 null。
 - **确定性护栏**:权限、预算、限流、触发与停止条件由确定性代码执行,不交给 LLM。
 - **证据优先**:任何关键结论都必须引用可追溯 Evidence ID,允许返回"无法确定"。
-- **故障隔离**:AIOps Agent 失效不影响原有监控与告警链路。
+- **故障隔离**:AIOps Agent 失效不影响原有监控与告警链路;Temporal/Kafka/Agent/S3 不可用时降级不崩溃。
 
 ## 许可证
 

@@ -64,6 +64,36 @@ curl -s localhost:8088/v1/signals -H 'Content-Type: application/json' -d '{
 | 改了 `shared/sql` 未生效 | DDL 仅首次建卷执行;`make clean && make up` 或手动 `make psql` 执行 |
 | Worker 无诊断 | 确认 `AIOPS_MODEL_PROVIDER=mock`(默认无需 API key);查看 worker 日志 |
 
+## 安全模式(生产化)
+
+默认已启用认证与 webhook 签名。相关环境变量(见 [`SECURITY.md`](SECURITY.md)):
+
+```bash
+# 认证(开发用内置 hs256 签发;生产切 oidc)
+export AIOPS_AUTH_MODE=hs256
+export AIOPS_AUTH_HS256_SECRET=<改成强随机值>
+# 内部 API 共享密钥(control-plane 与 ai-worker 必须一致)
+export AIOPS_INTERNAL_TOKEN=<强随机值>
+# Signal webhook HMAC 签名密钥(告警源与 ingress 共享)
+export AIOPS_WEBHOOK_SECRET=<强随机值>
+# 可观测性(可选,设置后导出 OTLP trace)
+export AIOPS_OTLP_ENDPOINT=localhost:4318
+# cluster-agent mTLS(生产开启)
+export AIOPS_AGENT_MTLS_ENABLED=true   # 需先跑 deploy/certs/gen-certs.sh
+```
+
+演示账号(hs256 模式):`alice/alice-pass`(sre)、`bob/bob-pass`(oncall,payment+cart)、`viewer/viewer-pass`(只读 payment)。
+
+一键安全验证:
+```bash
+bash scripts/check-auth.sh            # 认证/RBAC/ABAC/幂等/webhook/内部 token(14 项)
+bash scripts/prod-e2e.sh              # 认证+签名全开的完整 RCA E2E
+bash scripts/check-frontend-auth.sh   # 前端经代理的登录链路
+bash scripts/check-metrics.sh         # Prometheus /metrics 抓取
+```
+
+生产 Kubernetes 部署见 [`../deploy/DEPLOY.md`](../deploy/DEPLOY.md)。
+
 ## 验收清单
 
-对照 [`../生产级AIOps-Agent架构设计.md`](../生产级AIOps-Agent架构设计.md) 第 22 节。首版落地情况见 [`ACCEPTANCE.md`](ACCEPTANCE.md)。
+对照 [`../生产级AIOps-Agent架构设计.md`](../生产级AIOps-Agent架构设计.md) 第 22 节。落地情况见 [`ACCEPTANCE.md`](ACCEPTANCE.md)。
