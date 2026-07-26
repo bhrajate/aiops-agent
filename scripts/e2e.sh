@@ -111,8 +111,27 @@ for h in (d.get("hypotheses") or [])[:3]:
     print(f"  - [{h['status']}] conf={h['confidence']:.2f} {h['statement'][:60]} sup={h['supporting_evidence_ids']}")
 PY
 
-echo "=== 7) 时间线事件数 ==="
-curl -s "localhost:8088/v1/investigations/$INV" >/dev/null
+echo "=== 7) 证据接口 GET /v1/evidence/{id} ==="
+EVID=$(python3 -c 'import json;d=json.load(open("'"$LOGDIR"'/final.json"));e=d.get("evidence") or [];print(e[0]["evidence_id"] if e else "")')
+if [ -n "$EVID" ]; then
+  curl -s "localhost:8088/v1/evidence/$EVID" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("evidence",d["evidence_id"],"type=",d["type"],"source=",d["source"],"redaction=",d["redaction_status"])'
+fi
+
+echo "=== 8) 人工反馈:confirm ==="
+curl -s "localhost:8088/v1/investigations/$INV/feedback" -H 'Content-Type: application/json' \
+  -d '{"author":"oncall-alice","action":"confirm","confirmed_root_cause":"新版本连接池配置回归","comment":"已核实"}' \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print("feedback",d.get("feedback_id"),"review=",d.get("review_status"))'
+
+echo "=== 9) 人工反馈:close(应关闭 Incident)==="
+curl -s "localhost:8088/v1/investigations/$INV/feedback" -H 'Content-Type: application/json' \
+  -d '{"author":"oncall-alice","action":"close","comment":"处置完成"}' >/dev/null
+sleep 1
+curl -s "localhost:8088/v1/incidents/$INC" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("incident status:",d["incident"]["status"]);print("investigation phase:",d["investigations"][0]["phase"] if d["investigations"] else "?")'
+
+echo "=== 10) 审计日志抽样 ==="
+docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -t \
+  -c "select action, result, count(*) from audit_log group by action, result order by 1;" 2>/dev/null | sed '/^$/d'
+
 echo "done. logs in $LOGDIR"
-echo "=== ai-worker log tail ==="
-tail -15 "$LOGDIR/ai-worker.log"
+echo "=== ai-worker log tail (errors only) ==="
+grep -iE "error|traceback|exception" "$LOGDIR/ai-worker.log" | tail -5 || echo "(no worker errors)"
