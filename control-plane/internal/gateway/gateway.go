@@ -239,13 +239,25 @@ func (g *Gateway) buildScope(inc model.Incident) agentclient.Scope {
 		ns = r.Namespace
 		resource = map[string]any{"kind": r.Kind, "name": r.Name, "uid": r.UID}
 	}
+	// 时间窗从 incident first_seen 推导(而非固定 1h):故障早于 1 小时开始时,
+	// 固定窗会漏掉起始证据。取 first_seen 前留 15 分钟基线,上限 24h 防超大扫描。
 	now := time.Now().UTC()
+	from := now.Add(-1 * time.Hour)
+	if !inc.FirstSeen.IsZero() {
+		cand := inc.FirstSeen.Add(-15 * time.Minute)
+		if cand.Before(from) {
+			from = cand
+		}
+		if min := now.Add(-24 * time.Hour); from.Before(min) {
+			from = min // 上限 24h
+		}
+	}
 	return agentclient.Scope{
 		ClusterID: inc.ClusterID,
 		Namespace: ns,
 		Resource:  resource,
 		TimeRange: map[string]any{
-			"from": now.Add(-1 * time.Hour).Format(time.RFC3339),
+			"from": from.Format(time.RFC3339),
 			"to":   now.Format(time.RFC3339),
 		},
 	}

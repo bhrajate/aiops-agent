@@ -79,8 +79,24 @@ func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]a
 		})
 	}
 
+	// 取最慢 trace 的 span 详情,定位"哪个下游 span 变慢"(仅只读 GET /api/traces/{id})。
+	var topSpanName, topSpanSvc string
+	var topSpanMs int
+	var spans []map[string]any
+	if slowestID != "" {
+		if sp, top, err := c.traceSpans(ctx, slowestID); err != nil {
+			// span 详情失败不致命:降级为仅 trace 发现
+		} else {
+			spans = sp
+			topSpanName, topSpanSvc, topSpanMs = top.name, top.svc, top.ms
+		}
+	}
+
 	summary := fmt.Sprintf("%s/%s 采样到 %d 条 trace,最慢 %dms(trace %s)。",
 		ns(scope), orAll(svc), len(traces), slowest, truncate(slowestID, 16))
+	if topSpanName != "" {
+		summary += fmt.Sprintf(" 最慢 span:%s@%s 耗时 %dms(定位下游瓶颈)。", topSpanName, topSpanSvc, topSpanMs)
+	}
 	if len(traces) == 0 {
 		summary = fmt.Sprintf("%s/%s 在该时间窗内无匹配 trace。", ns(scope), orAll(svc))
 	}
@@ -91,6 +107,88 @@ func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]a
 		"traces":        traces,
 		"slowest_ms":    slowest,
 		"slowest_trace": slowestID,
+		"slowest_spans": spans,
+		"slowest_span":  map[string]any{"name": topSpanName, "service": topSpanSvc, "duration_ms": topSpanMs},
 	}
 	return Result{Source: "tempo", Summary: summary, Raw: raw, Freshness: "live"}, nil
+}
+
+// tempoTraceResponse 建模 GET /api/traces/{id} 的 OTLP batches 结构(只取定位瓶颈所需字段)。
+type tempoTraceResponse struct {
+	Batches []struct {
+		Resource struct {
+			Attributes []struct {
+				Key   string `json:"key"`
+				Value struct {
+					StringValue string `json:"stringValue"`
+				} `json:"value"`
+			} `json:"attributes"`
+		} `json:"resource"`
+		ScopeSpans []struct {
+			Spans []struct {
+				Name              string `json:"name"`
+				StartTimeUnixNano string `json:"startTimeUnixNano"`
+				EndTimeUnixNano   string `json:"endTimeUnixNano"`
+			} `json:"spans"`
+		} `json:"scopeSpans"`
+	} `json:"batches"`
+}
+
+type topSpan struct {
+	name, svc string
+	ms        int
+}
+
+// traceSpans 拉取单条 trace 的所有 span,返回 span 列表与最慢 span(只读)。
+func (c *tempoClient) traceSpans(ctx context.Context, traceID string) ([]map[string]any, topSpan, error) {
+	// traceID 仅允许十六进制,防路径注入。
+	if !isHex(traceID) {
+		return nil, topSpan{}, fmt.Errorf("invalid trace id")
+	}
+	var tr tempoTraceResponse
+	if err := httpGetJSON(ctx, c.hc, c.base+"/api/traces/"+traceID, &tr); err != nil {
+		return nil, topSpan{}, err
+	}
+	var out []map[string]any
+	var top topSpan
+	for _, b := range tr.Batches {
+		svc := ""
+		for _, a := range b.Resource.Attributes {
+			if a.Key == "service.name" {
+				svc = a.Value.StringValue
+			}
+		}
+		for _, ss := range b.ScopeSpans {
+			for _, s := range ss.Spans {
+				ms := spanDurationMs(s.StartTimeUnixNano, s.EndTimeUnixNano)
+				out = append(out, map[string]any{"name": s.Name, "service": svc, "duration_ms": ms})
+				if ms > top.ms {
+					top = topSpan{name: s.Name, svc: svc, ms: ms}
+				}
+			}
+		}
+	}
+	return out, top, nil
+}
+
+func spanDurationMs(startNano, endNano string) int {
+	s, err1 := strconv.ParseInt(startNano, 10, 64)
+	e, err2 := strconv.ParseInt(endNano, 10, 64)
+	if err1 != nil || err2 != nil || e < s {
+		return 0
+	}
+	return int((e - s) / 1_000_000)
+}
+
+// isHex 判断字符串是否全为十六进制字符(trace id 校验)。
+func isHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

@@ -97,6 +97,11 @@ func TestLiveLokiQueryRange(t *testing.T) {
 func TestLiveTempoSearch(t *testing.T) {
 	var gotPath, gotTags string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/traces/") {
+			// span 详情调用(P2):返回空 batches,不影响 search 断言
+			_, _ = w.Write([]byte(`{"batches":[]}`))
+			return
+		}
 		gotPath = r.URL.Path
 		gotTags = r.URL.Query().Get("tags")
 		_, _ = w.Write([]byte(`{"traces":[
