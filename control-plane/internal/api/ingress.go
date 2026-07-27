@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/aiops/control-plane/internal/httpx"
@@ -18,7 +19,10 @@ import (
 // Ingress 是 Signal Ingress(文档 6.1):鉴权、快速 2xx、标准化、持久化+outbox。
 // Webhook 是信号入口,不是 RCA 触发器 —— 这里绝不等待模型或调查。
 // SignalMetrics nil-safe 信号计数。
-type SignalMetrics interface{ IncSignal(source string) }
+type SignalMetrics interface {
+	IncSignal(source string)
+	IncIngressThrottled(tenant string)
+}
 
 type Ingress struct {
 	store         *store.Store
@@ -26,11 +30,15 @@ type Ingress struct {
 	tenant        string
 	webhookSecret string
 	metrics       SignalMetrics
+	limiter       httpx.RateLimiter // 可为 nil(不限流)
 	log           *slog.Logger
 }
 
-func NewIngress(s *store.Store, clusterID, tenant, webhookSecret string, metrics SignalMetrics, log *slog.Logger) *Ingress {
-	return &Ingress{store: s, clusterID: clusterID, tenant: tenant, webhookSecret: webhookSecret, metrics: metrics, log: log}
+func NewIngress(s *store.Store, clusterID, tenant, webhookSecret string, metrics SignalMetrics, limiter httpx.RateLimiter, log *slog.Logger) *Ingress {
+	return &Ingress{
+		store: s, clusterID: clusterID, tenant: tenant, webhookSecret: webhookSecret,
+		metrics: metrics, limiter: limiter, log: log,
+	}
 }
 
 // PostSignal 接收信号。支持两种载荷:
@@ -70,6 +78,28 @@ func (i *Ingress) PostSignal(w http.ResponseWriter, r *http.Request) {
 	if len(signals) == 0 {
 		httpx.Error(w, http.StatusBadRequest, "bad_request", "no signals parsed")
 		return
+	}
+
+	// 限流:按**信号条数**计费而不是请求数——一个 Alertmanager webhook 可以带
+	// 几百条告警,按请求计费挡不住告警风暴。在写库之前判定,保护 DB 与 outbox。
+	// 按租户分桶,一个租户的风暴不影响其他租户。
+	if i.limiter != nil {
+		tenant := signals[0].TenantID
+		if tenant == "" {
+			tenant = i.tenant
+		}
+		if ok, retry := i.limiter.Allow(tenant, len(signals)); !ok {
+			if i.metrics != nil {
+				i.metrics.IncIngressThrottled(tenant)
+			}
+			i.store.Audit(r.Context(), tenant, "ingress", "signal_ingest", "signal", "", "denied",
+				map[string]any{"cluster": i.clusterID},
+				map[string]any{"reason": "rate_limited", "signals": len(signals)})
+			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
+			httpx.Error(w, http.StatusTooManyRequests, "rate_limited",
+				"signal ingest rate limit exceeded")
+			return
+		}
 	}
 
 	accepted := 0

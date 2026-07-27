@@ -97,6 +97,12 @@ type Config struct {
 	//   janitor  数据保留清理(多副本下靠 advisory lock 互斥)
 	Roles []string
 
+	// 信号入口限流(F6):按租户令牌桶,按**信号条数**计费。
+	// <=0 表示关闭。抗告警风暴:保护 ingress/DB/outbox 不被打穿。
+	// 注意:进程内限流,每副本独立配额,总容量随副本数放大(见 httpx.TokenBucket)。
+	IngressRatePerSec float64
+	IngressBurst      float64
+
 	// 数据保留(retention):各表保留天数,<=0 表示**不清理该表**。
 	// 清理由 janitor 角色分批执行,只删终态数据,永不触碰活跃 incident。
 	Retention RetentionConfig
@@ -163,6 +169,15 @@ func getint(key string, def int) int {
 	return def
 }
 
+func getfloat(key string, def float64) float64 {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
+}
+
 // Load 读取环境变量并填充默认值。
 func Load() Config {
 	brokers := strings.Split(getenv("AIOPS_KAFKA_BROKERS", "localhost:19092"), ",")
@@ -218,6 +233,11 @@ func Load() Config {
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),
 		CORSOrigins:  splitNonEmpty(getenv("AIOPS_CORS_ORIGINS", "")),
 		Roles:        splitNonEmpty(strings.ToLower(getenv("AIOPS_ROLES", "all"))),
+
+		// 默认值按"每秒 50 条、突发 500 条"设定:正常告警量远低于此,
+		// 只在风暴时生效;设为 0 可关闭。
+		IngressRatePerSec: getfloat("AIOPS_INGRESS_RATE_PER_SEC", 50),
+		IngressBurst:      getfloat("AIOPS_INGRESS_BURST", 500),
 
 		Retention: RetentionConfig{
 			// 默认开启:无界增长是生产事故的常见来源,默认不清理等于默认埋雷。

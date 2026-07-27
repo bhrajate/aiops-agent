@@ -26,6 +26,7 @@ import (
 	"github.com/aiops/control-plane/internal/bus"
 	"github.com/aiops/control-plane/internal/config"
 	"github.com/aiops/control-plane/internal/gateway"
+	"github.com/aiops/control-plane/internal/httpx"
 	"github.com/aiops/control-plane/internal/incident"
 	"github.com/aiops/control-plane/internal/objstore"
 	"github.com/aiops/control-plane/internal/obsquery"
@@ -179,7 +180,14 @@ func main() {
 	mgr := incident.New(st, cfg.CorrelationWindowSec, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
 		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)
-	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, metrics, log)
+	// 信号入口限流(F6):告警风暴是预期故障模式,ingress 之前只有 2MB body 上限。
+	// nil(未配置)即不限流。
+	ingressLimiter := httpx.NewTokenBucket(cfg.IngressRatePerSec, cfg.IngressBurst)
+	if ingressLimiter != nil {
+		log.Info("signal ingress rate limiting enabled",
+			"rate_per_sec", cfg.IngressRatePerSec, "burst", cfg.IngressBurst)
+	}
+	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, metrics, ingressLimiter, log)
 
 	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
 	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, cfg.CORSOrigins, log)

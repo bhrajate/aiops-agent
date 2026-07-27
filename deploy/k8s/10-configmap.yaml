@@ -52,6 +52,14 @@ data:
   # ---- 可靠性 ----
   AIOPS_MAX_DELIVERY_ATTEMPTS: "5"
 
+  # ---- 信号入口限流(抗告警风暴)----
+  # 按租户令牌桶,按**信号条数**计费(一个 webhook 可带数百条告警,
+  # 按请求计费挡不住风暴)。超限返回 429 + Retry-After。
+  # 注意:进程内限流,每副本独立配额 → 集群总容量 = 本值 × 副本数。
+  # 设为 "0" 关闭。
+  AIOPS_INGRESS_RATE_PER_SEC: "50"
+  AIOPS_INGRESS_BURST: "500"
+
   # ---- 数据保留(retention)----
   # 高写入表若不清理会无界增长(signals / investigation_events / audit_log 最先出问题)。
   # 清理由 janitor 角色分批执行:只删终态数据,活跃 incident 与未结束调查永不触碰。
