@@ -40,6 +40,34 @@
 | 评测体系 | Golden Dataset 离线回放 + 质量门槛 | 4/4 门槛 PASS |
 | 部署编排 | K8s manifests + Helm + CI + mTLS 证书脚本 | YAML 校验 + 只读 RBAC |
 
+## 验证脚本
+
+`scripts/` 下每个专项检查对应一条不变量。注意有几个脚本**不自己起后端**,
+必须用 `with-backend.sh` 运行(否则 curl 静默失败、断言照着库里残留数据打分,
+通过与失败都没有意义——这是曾经踩过的坑,现在这些脚本会 fail-fast):
+
+```bash
+./scripts/prod-e2e.sh                       # 全链路(自带构建 + 起后端)
+./scripts/with-backend.sh scripts/check-two-tier.sh \
+                          scripts/check-correlation-window.sh \
+                          scripts/check-blast.sh
+./scripts/check-ratelimit.sh                # 自带构建 + 起独立实例
+```
+
+| 脚本 | 验证的不变量 | 当前结果 |
+|---|---|---|
+| `prod-e2e.sh` | 全链路:信号→incident→调查→证据→诊断→反馈 | evidence 7 / 0 拒绝 |
+| `check-auth.sh` | 认证与 RBAC/ABAC 拒绝路径 | 14/14 |
+| `check-two-tier.sh` | 去重(group)与聚合(incident)分离、单 group 恢复不误关 incident | 14/14 |
+| `check-correlation-window.sh` | 相关性合并受时间窗约束;陈旧 incident 自动 resolved | 6/6 |
+| `check-blast.sh` | 影响面扩大可见;`blast_radius` 四维齐备(F3) | PASS |
+| `check-orphan-reconcile.sh` | 孤儿调查补偿 | 4/4 |
+| `check-roles.sh` | 按角色拆分部署单元 | 11/11 |
+| `check-ratelimit.sh` | 入口限流:429 + Retry-After + **按条计费** + 指标(F6) | 7/7 |
+| `check-metrics.sh` | Prometheus 指标暴露 | PASS |
+| `check-frontend-auth.sh` | 前端登录与越权 | 5/5 |
+| `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
+
 ## 核心设计原则落地
 
 Incident-first / Evidence-first / Workflow-first / Read-only / Deterministic guardrails /
