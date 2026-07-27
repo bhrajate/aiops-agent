@@ -88,13 +88,42 @@ type Config struct {
 	CORSOrigins []string
 
 	// 角色:控制哪些子系统在本进程启用,实现按角色拆分部署单元。
-	// 取值(逗号分隔):api / internal / ingest / trigger / outbox,或 all(默认)。
+	// 取值(逗号分隔):api / internal / ingest / trigger / outbox / janitor,或 all(默认)。
 	//   api      公共 API(:8088,前端与 webhook 入口)
 	//   internal 内部 API(:8090,Tool Gateway + AI Worker 回写)
 	//   ingest   signals consumer → Incident Manager(两层聚合)
 	//   trigger  incidents consumer → Trigger Policy/Orchestrator
 	//   outbox   Outbox 投递循环
+	//   janitor  数据保留清理(多副本下靠 advisory lock 互斥)
 	Roles []string
+
+	// 数据保留(retention):各表保留天数,<=0 表示**不清理该表**。
+	// 清理由 janitor 角色分批执行,只删终态数据,永不触碰活跃 incident。
+	Retention RetentionConfig
+}
+
+// RetentionConfig 各类数据的保留期与清理节奏。
+//
+// 分两类:
+//   - 运营数据(signals/events/audit/outbox/dead_letters/idempotency):按时间清理;
+//   - 案例数据(incidents + 其调查/证据/假设):只有**终态且过期**才整案清理。
+//
+// 默认值偏保守(审计留最久),可按合规要求调整。
+type RetentionConfig struct {
+	Enabled bool
+
+	SignalDays      int // 原始信号
+	EventDays       int // investigation_events 时间线
+	AuditDays       int // audit_log(合规相关,默认最长)
+	OutboxDays      int // 已发布的 outbox 记录
+	DeadLetterDays  int // 死信
+	IdempotencyDays int // 幂等键(短生命周期)
+	// CaseDays 终态 incident 及其级联数据(investigations/evidence/hypotheses/
+	// alert_groups/human_feedback)的保留天数。
+	CaseDays int
+
+	IntervalSec int // 清理循环间隔
+	BatchSize   int // 单批删除行数上限(控制锁持有时间)
 }
 
 // HasRole 判断某角色是否在本进程启用(all 或空表示全部启用)。
@@ -189,6 +218,20 @@ func Load() Config {
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),
 		CORSOrigins:  splitNonEmpty(getenv("AIOPS_CORS_ORIGINS", "")),
 		Roles:        splitNonEmpty(strings.ToLower(getenv("AIOPS_ROLES", "all"))),
+
+		Retention: RetentionConfig{
+			// 默认开启:无界增长是生产事故的常见来源,默认不清理等于默认埋雷。
+			Enabled:         getbool("AIOPS_RETENTION_ENABLED", true),
+			SignalDays:      getint("AIOPS_RETENTION_SIGNAL_DAYS", 30),
+			EventDays:       getint("AIOPS_RETENTION_EVENT_DAYS", 90),
+			AuditDays:       getint("AIOPS_RETENTION_AUDIT_DAYS", 365),
+			OutboxDays:      getint("AIOPS_RETENTION_OUTBOX_DAYS", 7),
+			DeadLetterDays:  getint("AIOPS_RETENTION_DEAD_LETTER_DAYS", 30),
+			IdempotencyDays: getint("AIOPS_RETENTION_IDEMPOTENCY_DAYS", 7),
+			CaseDays:        getint("AIOPS_RETENTION_CASE_DAYS", 180),
+			IntervalSec:     getint("AIOPS_RETENTION_INTERVAL_SEC", 3600),
+			BatchSize:       getint("AIOPS_RETENTION_BATCH_SIZE", 5000),
+		},
 	}
 }
 

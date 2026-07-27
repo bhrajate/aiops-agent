@@ -17,6 +17,8 @@ type Metrics struct {
 	ToolLatency           *prometheus.HistogramVec // by tool
 	DeadLetters           *prometheus.CounterVec   // by topic
 	AuthDenials           *prometheus.CounterVec   // by reason
+	RetentionPurged       *prometheus.CounterVec   // by target
+	IngressThrottled      *prometheus.CounterVec   // by tenant
 	reg                   *prometheus.Registry
 }
 
@@ -39,10 +41,17 @@ func New() *Metrics {
 			Name: "aiops_dead_letters_total", Help: "Messages dead-lettered"}, []string{"topic"}),
 		AuthDenials: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aiops_auth_denials_total", Help: "Authz denials"}, []string{"reason"}),
+		RetentionPurged: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_retention_purged_rows_total",
+			Help: "Rows deleted by the retention janitor"}, []string{"target"}),
+		IngressThrottled: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_ingress_throttled_total",
+			Help: "Signal ingress requests rejected by rate limiting"}, []string{"tenant"}),
 		reg: reg,
 	}
 	reg.MustRegister(m.SignalsIngested, m.IncidentsCreated, m.InvestigationsStarted,
-		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials)
+		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials,
+		m.RetentionPurged, m.IngressThrottled)
 	// Go runtime + process 指标
 	reg.MustRegister(prometheus.NewGoCollector())
 	return m
@@ -83,5 +92,15 @@ func (m *Metrics) IncDeadLetter(topic string) {
 func (m *Metrics) IncAuthDenial(reason string) {
 	if m != nil {
 		m.AuthDenials.WithLabelValues(reason).Inc()
+	}
+}
+func (m *Metrics) ObserveRetentionPurge(target string, rows int) {
+	if m != nil && rows > 0 {
+		m.RetentionPurged.WithLabelValues(target).Add(float64(rows))
+	}
+}
+func (m *Metrics) IncIngressThrottled(tenant string) {
+	if m != nil {
+		m.IngressThrottled.WithLabelValues(tenant).Inc()
 	}
 }

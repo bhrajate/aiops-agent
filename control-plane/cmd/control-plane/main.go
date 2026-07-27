@@ -30,6 +30,7 @@ import (
 	"github.com/aiops/control-plane/internal/objstore"
 	"github.com/aiops/control-plane/internal/obsquery"
 	"github.com/aiops/control-plane/internal/outbox"
+	"github.com/aiops/control-plane/internal/retention"
 	"github.com/aiops/control-plane/internal/store"
 	"github.com/aiops/control-plane/internal/telemetry"
 	"github.com/aiops/control-plane/internal/temporalx"
@@ -249,6 +250,25 @@ func main() {
 				Topic: "incidents", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
 			})
 		}()
+	}
+
+	// ---- 数据保留清理(F4,role: janitor)----
+	// 高写入表(signals/events/audit_log/outbox/…)此前无界增长。Janitor 分批清理,
+	// 只删终态数据;多副本下靠 PG advisory lock 互斥,启用多个副本也安全。
+	if cfg.Retention.Enabled && cfg.HasRole("janitor") {
+		jan := retention.New(st, retention.Config{
+			SignalDays:      cfg.Retention.SignalDays,
+			EventDays:       cfg.Retention.EventDays,
+			AuditDays:       cfg.Retention.AuditDays,
+			OutboxDays:      cfg.Retention.OutboxDays,
+			DeadLetterDays:  cfg.Retention.DeadLetterDays,
+			IdempotencyDays: cfg.Retention.IdempotencyDays,
+			CaseDays:        cfg.Retention.CaseDays,
+			IntervalSec:     cfg.Retention.IntervalSec,
+			BatchSize:       cfg.Retention.BatchSize,
+		}, metrics, log)
+		wg.Add(1)
+		go func() { defer wg.Done(); jan.Run(ctx) }()
 	}
 
 	// ---- HTTP 服务(role: api / internal)----

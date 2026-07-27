@@ -55,8 +55,10 @@ spec:
             - secretRef:
                 name: {{ include "aiops.secretName" . }}
           env:
+            # janitor 放在后台副本:清理是低频批处理,不该占 API 副本资源。
+            # 多副本下靠 PG advisory lock 互斥,副本数 >1 也安全。
             - name: AIOPS_ROLES
-              value: "ingest,trigger,outbox"
+              value: "ingest,trigger,outbox,janitor"
           # 无入站端口:用进程存在性作探针(括号避免探针自身 cmdline 被匹配)
           livenessProbe:
             exec:
