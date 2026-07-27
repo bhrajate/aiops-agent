@@ -168,10 +168,13 @@ func main() {
 	outboxPub := outbox.New(st, publisher, cfg.MaxDeliveryAttempts, log)
 
 	var wg sync.WaitGroup
+	log.Info("enabled roles", "roles", cfg.Roles)
 
-	// ---- Outbox 投递循环 ----
-	wg.Add(1)
-	go func() { defer wg.Done(); outboxPub.Run(ctx, 500*time.Millisecond) }()
+	// ---- Outbox 投递循环(role: outbox)----
+	if cfg.HasRole("outbox") {
+		wg.Add(1)
+		go func() { defer wg.Done(); outboxPub.Run(ctx, 500*time.Millisecond) }()
+	}
 
 	// DLQ 回调:重试超限的消息落 dead_letters 表 + 审计告警(SECURITY §7)
 	deadLetter := func(ctx context.Context, topic, key string, value []byte, lastErr error, attempts int) error {
@@ -189,50 +192,60 @@ func main() {
 		return nil
 	}
 
-	// ---- 消费者:signals → Incident Manager ----
-	sigConsumer := bus.NewConsumer(cfg.KafkaBrokers, "signals", "incident-manager")
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer sigConsumer.Close()
-		log.Info("incident-manager consuming signals")
-		_ = sigConsumer.RunWithOptions(ctx, mgr.HandleSignal, bus.RunOptions{
-			Topic: "signals", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
-		})
-	}()
+	// ---- 消费者:signals → Incident Manager(role: ingest)----
+	if cfg.HasRole("ingest") {
+		sigConsumer := bus.NewConsumer(cfg.KafkaBrokers, "signals", "incident-manager")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sigConsumer.Close()
+			log.Info("incident-manager consuming signals")
+			_ = sigConsumer.RunWithOptions(ctx, mgr.HandleSignal, bus.RunOptions{
+				Topic: "signals", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
+			})
+		}()
+	}
 
-	// ---- 消费者:incidents → Trigger/Orchestrator ----
-	incConsumer := bus.NewConsumer(cfg.KafkaBrokers, "incidents", "trigger-policy")
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer incConsumer.Close()
-		log.Info("trigger-policy consuming incidents")
-		_ = incConsumer.RunWithOptions(ctx, orch.HandleIncidentEvent, bus.RunOptions{
-			Topic: "incidents", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
-		})
-	}()
+	// ---- 消费者:incidents → Trigger/Orchestrator(role: trigger)----
+	if cfg.HasRole("trigger") {
+		incConsumer := bus.NewConsumer(cfg.KafkaBrokers, "incidents", "trigger-policy")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer incConsumer.Close()
+			log.Info("trigger-policy consuming incidents")
+			_ = incConsumer.RunWithOptions(ctx, orch.HandleIncidentEvent, bus.RunOptions{
+				Topic: "incidents", MaxAttempts: cfg.MaxDeliveryAttempts, OnDeadLetter: deadLetter,
+			})
+		}()
+	}
 
-	// ---- HTTP 服务 ----
-	publicSrv := &http.Server{Addr: cfg.PublicAddr, Handler: publicAPI.Routes(), ReadHeaderTimeout: 10 * time.Second}
-	internalSrv := &http.Server{Addr: cfg.InternalAddr, Handler: internalAPI.Routes(), ReadHeaderTimeout: 10 * time.Second}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		log.Info("public API listening", "addr", cfg.PublicAddr)
-		if err := publicSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("public API failed", "err", err)
-		}
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		log.Info("internal API listening", "addr", cfg.InternalAddr)
-		if err := internalSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("internal API failed", "err", err)
-		}
-	}()
+	// ---- HTTP 服务(role: api / internal)----
+	// 注:metrics 端点挂在内部 API 上;只跑 api 角色的副本不暴露 /metrics,
+	// 由 internal 角色副本提供采集端点。
+	var publicSrv, internalSrv *http.Server
+	if cfg.HasRole("api") {
+		publicSrv = &http.Server{Addr: cfg.PublicAddr, Handler: publicAPI.Routes(), ReadHeaderTimeout: 10 * time.Second}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info("public API listening", "addr", cfg.PublicAddr)
+			if err := publicSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("public API failed", "err", err)
+			}
+		}()
+	}
+	if cfg.HasRole("internal") {
+		internalSrv = &http.Server{Addr: cfg.InternalAddr, Handler: internalAPI.Routes(), ReadHeaderTimeout: 10 * time.Second}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Info("internal API listening", "addr", cfg.InternalAddr)
+			if err := internalSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("internal API failed", "err", err)
+			}
+		}()
+	}
 
 	// ---- 优雅退出 ----
 	sigCh := make(chan os.Signal, 1)
@@ -241,8 +254,12 @@ func main() {
 	log.Info("shutting down...")
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutCancel()
-	_ = publicSrv.Shutdown(shutCtx)
-	_ = internalSrv.Shutdown(shutCtx)
+	if publicSrv != nil {
+		_ = publicSrv.Shutdown(shutCtx)
+	}
+	if internalSrv != nil {
+		_ = internalSrv.Shutdown(shutCtx)
+	}
 	cancel()
 	wg.Wait()
 	log.Info("bye")

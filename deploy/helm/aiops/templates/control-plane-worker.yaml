@@ -1,0 +1,92 @@
+{{- if .Values.controlPlane.splitRoles }}
+# 控制面后台管道副本(物理平面分离,优化③):
+# 只跑 ingest(signals→Incident Manager)/ trigger(incidents→Orchestrator)/ outbox,
+# 不监听 HTTP。与 API 副本独立扩缩;后台 panic 不影响 API 可用性。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane-worker
+  labels:
+    app.kubernetes.io/name: control-plane-worker
+    app.kubernetes.io/part-of: aiops
+    app.kubernetes.io/component: control-plane-worker
+spec:
+  replicas: {{ .Values.controlPlane.worker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: control-plane-worker
+        app.kubernetes.io/part-of: aiops
+        app.kubernetes.io/component: control-plane-worker
+    spec:
+      serviceAccountName: control-plane
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: control-plane-worker
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: control-plane-worker
+          image: {{ include "aiops.image" (list .Values.controlPlane . "control-plane") | quote }}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: {{ include "aiops.secretName" . }}
+          env:
+            - name: AIOPS_ROLES
+              value: "ingest,trigger,outbox"
+          # 无入站端口:用进程存在性作探针(括号避免探针自身 cmdline 被匹配)
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f '[c]ontrol-plane' >/dev/null"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: {{ .Values.controlPlane.worker.resources.requests.cpu | quote }}
+              memory: {{ .Values.controlPlane.worker.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.controlPlane.worker.resources.limits.cpu | quote }}
+              memory: {{ .Values.controlPlane.worker.resources.limits.memory | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane-worker-pdb
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane-worker
+{{- end }}

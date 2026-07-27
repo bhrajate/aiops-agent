@@ -100,6 +100,10 @@ AIOPS_S3_ENDPOINT=http://localhost:9000
 AIOPS_S3_BUCKET=aiops-evidence
 AIOPS_S3_ACCESS_KEY=minioadmin
 AIOPS_S3_SECRET_KEY=minioadmin
+# 角色拆分(物理平面分离):控制哪些子系统在本进程启用。
+#   api / internal / ingest / trigger / outbox,或 all(默认全开=单体)
+#   例:API 副本 AIOPS_ROLES=api,internal;后台副本 AIOPS_ROLES=ingest,trigger,outbox
+AIOPS_ROLES=all
 AIOPS_CLUSTER_AGENT_URL=http://localhost:9100   # 单集群兼容(未配置下面的映射时生效)
 # 多集群:Tool Gateway 按 incident.cluster_id 路由到对应集群的 Agent。
 # 未在映射中的集群一律拒绝工具调用(no_agent_for_cluster),不回退到其他 Agent。

@@ -75,6 +75,28 @@ type Config struct {
 
 	// CORS 允许的前端源(逗号分隔);为空则仅放行 localhost 开发源
 	CORSOrigins []string
+
+	// 角色:控制哪些子系统在本进程启用,实现按角色拆分部署单元。
+	// 取值(逗号分隔):api / internal / ingest / trigger / outbox,或 all(默认)。
+	//   api      公共 API(:8088,前端与 webhook 入口)
+	//   internal 内部 API(:8090,Tool Gateway + AI Worker 回写)
+	//   ingest   signals consumer → Incident Manager(两层聚合)
+	//   trigger  incidents consumer → Trigger Policy/Orchestrator
+	//   outbox   Outbox 投递循环
+	Roles []string
+}
+
+// HasRole 判断某角色是否在本进程启用(all 或空表示全部启用)。
+func (c Config) HasRole(role string) bool {
+	if len(c.Roles) == 0 {
+		return true
+	}
+	for _, r := range c.Roles {
+		if r == "all" || r == role {
+			return true
+		}
+	}
+	return false
 }
 
 func getenv(key, def string) string {
@@ -152,6 +174,7 @@ func Load() Config {
 		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),
 		CORSOrigins:  splitNonEmpty(getenv("AIOPS_CORS_ORIGINS", "")),
+		Roles:        splitNonEmpty(strings.ToLower(getenv("AIOPS_ROLES", "all"))),
 	}
 }
 

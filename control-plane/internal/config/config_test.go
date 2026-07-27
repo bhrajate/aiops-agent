@@ -80,6 +80,35 @@ func TestValidate_ProdOIDCRequiresJWKS(t *testing.T) {
 	}
 }
 
+func TestHasRole(t *testing.T) {
+	// 未配置 / all → 全部启用(向后兼容单体部署)
+	for _, c := range []Config{{}, {Roles: []string{"all"}}} {
+		for _, r := range []string{"api", "internal", "ingest", "trigger", "outbox"} {
+			if !c.HasRole(r) {
+				t.Errorf("roles=%v 应启用 %s", c.Roles, r)
+			}
+		}
+	}
+	// 仅 api:其他角色关闭
+	c := Config{Roles: []string{"api"}}
+	if !c.HasRole("api") {
+		t.Error("api 应启用")
+	}
+	for _, r := range []string{"internal", "ingest", "trigger", "outbox"} {
+		if c.HasRole(r) {
+			t.Errorf("roles=[api] 不应启用 %s", r)
+		}
+	}
+	// 组合角色
+	c2 := Config{Roles: []string{"ingest", "trigger", "outbox"}}
+	if !c2.HasRole("ingest") || !c2.HasRole("outbox") {
+		t.Error("组合角色应启用其成员")
+	}
+	if c2.HasRole("api") {
+		t.Error("组合角色不应启用未列出的 api")
+	}
+}
+
 func TestValidate_ProdHappyPath(t *testing.T) {
 	if err := base(true).Validate(); err != nil {
 		t.Fatalf("完整生产配置不应失败: %v", err)

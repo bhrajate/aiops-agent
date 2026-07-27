@@ -77,6 +77,16 @@ controlPlane:
   resources:
     requests: { cpu: "100m", memory: "128Mi" }
     limits: { cpu: "1", memory: "512Mi" }
+  # 按角色拆分部署(物理平面分离):
+  #   false → 单体,一个 Deployment 跑所有角色(默认,向后兼容)
+  #   true  → API 副本(api,internal)与后台管道副本(ingest,trigger,outbox)分开,
+  #           可独立扩缩;后台 panic 不影响 API 可用性
+  splitRoles: false
+  worker:               # splitRoles=true 时的后台管道副本
+    replicas: 2
+    resources:
+      requests: { cpu: "100m", memory: "128Mi" }
+      limits: { cpu: "1", memory: "512Mi" }
 
 aiWorker:
   replicas: 2

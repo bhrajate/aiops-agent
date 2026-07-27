@@ -61,7 +61,7 @@
 
 | 主题 | 设计文档表述 | 当前实现 | 差距性质 |
 |---|---|---|---|
-| **平面分离** | 三平面可独立部署 | **逻辑分层清晰,控制面为单体进程**:Ingress/Incident Manager/Trigger/Tool Gateway/两个 API/Outbox/两个 consumer 同二进制(Helm 单 Deployment)。可按需拆分,但目前不能独立扩缩 | 部署粒度,非分层错误 |
+| **平面分离** | 三平面可独立部署 | ✅ **支持按角色拆分**:`AIOPS_ROLES`(api/internal/ingest/trigger/outbox,默认 all)控制本进程启用哪些子系统;Helm `controlPlane.splitRoles=true` 渲染独立的 API 副本(api,internal)与后台管道副本(ingest,trigger,outbox),可独立扩缩、后台故障不影响 API。默认仍为单体(向后兼容) | 已闭合 |
 | **告警聚合** | 去重 + 相关告警聚合 + 拓扑关联 | ✅ **两层模型已实现**:`alert_groups`(去重单元,按 grouping_key 收敛同资源同规则重复告警)+ `incidents`(相关性单元,按 correlation_key = tenant/cluster/namespace 合并多个 group)。incident 的 affected_resources / blast_radius / severity / signal_count 由其下活跃 group 聚合得出;单个 group 恢复只关该 group,全部恢复才关 incident。**拓扑关联仍未实现**(见下一行) | 去重/聚合已分离;拓扑维度待补 |
 | **相关性含义** | 服务拓扑上下游关联 | 相关性维度为 **tenant/cluster/namespace**(非拓扑)。`TopologyRefs`/`ChangeRefs` 仍为空,无写入点。**同 namespace 相关 ≠ 因果**;跨 namespace 的上下游传播不会被合并 | 缺拓扑数据源 |
 | **深度 RCA** | Planner + 并行 Analyzer 深度调查 | **计划先定、逐个执行**:Planner 先产出工具清单,采集期模型不参与,要追问需等下一轮。非 native tool-use。取舍换来可重放性与可预测预算,但**能力上界低于"自由追问式"RCA** | 有意取舍,上界真实存在 |

@@ -51,6 +51,12 @@ spec:
                 name: aiops-config
             - secretRef:
                 name: {{ include "aiops.secretName" . }}
+          {{- if .Values.controlPlane.splitRoles }}
+          # 拆分模式:本副本只提供 API,不消费 Kafka、不投递 outbox
+          env:
+            - name: AIOPS_ROLES
+              value: "api,internal"
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /healthz
