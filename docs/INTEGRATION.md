@@ -100,7 +100,10 @@ AIOPS_S3_ENDPOINT=http://localhost:9000
 AIOPS_S3_BUCKET=aiops-evidence
 AIOPS_S3_ACCESS_KEY=minioadmin
 AIOPS_S3_SECRET_KEY=minioadmin
-AIOPS_CLUSTER_AGENT_URL=http://localhost:9100
+AIOPS_CLUSTER_AGENT_URL=http://localhost:9100   # 单集群兼容(未配置下面的映射时生效)
+# 多集群:Tool Gateway 按 incident.cluster_id 路由到对应集群的 Agent。
+# 未在映射中的集群一律拒绝工具调用(no_agent_for_cluster),不回退到其他 Agent。
+AIOPS_CLUSTER_AGENTS=prod-cn-1=https://agent-cn1:9100,edge-eu-2=https://agent-eu2:9100
 AIOPS_CONTROL_INTERNAL_URL=http://localhost:8090
 AIOPS_MODEL_PROVIDER=mock            # mock | anthropic
 AIOPS_ANTHROPIC_API_KEY=             # 切 anthropic 时填

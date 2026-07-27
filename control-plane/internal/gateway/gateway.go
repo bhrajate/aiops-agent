@@ -54,14 +54,14 @@ type ToolMetrics interface {
 
 type Gateway struct {
 	store   *store.Store
-	agent   *agentclient.Client
-	obj     RawSnapshotStore // 可为 nil(降级:仅存摘要)
-	metrics ToolMetrics      // 可为 nil
+	agents  *agentclient.Registry // 按 cluster_id 路由到该集群的 Agent
+	obj     RawSnapshotStore      // 可为 nil(降级:仅存摘要)
+	metrics ToolMetrics           // 可为 nil
 	log     *slog.Logger
 }
 
-func New(s *store.Store, agent *agentclient.Client, obj RawSnapshotStore, metrics ToolMetrics, log *slog.Logger) *Gateway {
-	return &Gateway{store: s, agent: agent, obj: obj, metrics: metrics, log: log}
+func New(s *store.Store, agents *agentclient.Registry, obj RawSnapshotStore, metrics ToolMetrics, log *slog.Logger) *Gateway {
+	return &Gateway{store: s, agents: agents, obj: obj, metrics: metrics, log: log}
 }
 
 func (g *Gateway) observeTool(tool, result string, seconds float64) {
@@ -124,9 +124,17 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 		req.Arguments = map[string]any{}
 	}
 
-	// 5) 调用只读数据源
+	// 5) 按 Incident 所属集群路由到对应 Agent(多集群隔离:未配置则拒绝,
+	//    绝不回退到其他集群的 Agent —— 打错集群等于跨集群越权读取)。
+	agent, aerr := g.agents.For(scope.ClusterID)
+	if aerr != nil {
+		g.deny(ctx, tenant, req, "no_agent_for_cluster")
+		return InvokeResult{Status: "denied", Reason: "no_agent_for_cluster"}, nil
+	}
+
+	// 调用只读数据源
 	start := time.Now()
-	res, err := g.agent.Invoke(ctx, req.Tool, req.Arguments, scope)
+	res, err := agent.Invoke(ctx, req.Tool, req.Arguments, scope)
 	elapsed := time.Since(start)
 	if err != nil {
 		g.observeTool(req.Tool, "error", elapsed.Seconds())

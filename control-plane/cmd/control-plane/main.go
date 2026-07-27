@@ -115,24 +115,47 @@ func main() {
 		log.Info("connected to object storage", "bucket", cfg.S3Bucket)
 	}
 
-	// ---- Cluster Agent 客户端(mTLS 可选,SECURITY §3)----
-	var agent *agentclient.Client
-	if cfg.AgentMTLSEnabled {
-		ac, aerr := agentclient.NewMTLS(cfg.ClusterAgentURL, agentclient.MTLSConfig{
-			ClientCert: cfg.AgentClientCert, ClientKey: cfg.AgentClientKey, CA: cfg.AgentCA,
-		})
+	// ---- Cluster Agent 客户端注册表(每集群一个 Agent;mTLS 可选,SECURITY §3)----
+	mtls := agentclient.MTLSConfig{ClientCert: cfg.AgentClientCert, ClientKey: cfg.AgentClientKey, CA: cfg.AgentCA}
+	newAgent := func(url string) (*agentclient.Client, error) {
+		if cfg.AgentMTLSEnabled {
+			return agentclient.NewMTLS(url, mtls)
+		}
+		return agentclient.New(url), nil
+	}
+	agentURLs, perr := agentclient.ParseAgentMap(cfg.ClusterAgents)
+	if perr != nil {
+		log.Error("invalid AIOPS_CLUSTER_AGENTS", "err", perr)
+		os.Exit(1)
+	}
+	byCluster := make(map[string]*agentclient.Client, len(agentURLs))
+	for cid, url := range agentURLs {
+		c, aerr := newAgent(url)
 		if aerr != nil {
-			log.Error("mTLS client init failed", "err", aerr)
+			log.Error("cluster-agent client init failed", "cluster", cid, "err", aerr)
 			os.Exit(1)
 		}
-		agent = ac
-		log.Info("cluster-agent client using mTLS", "url", cfg.ClusterAgentURL)
+		byCluster[cid] = c
+	}
+	var fallback *agentclient.Client
+	if len(byCluster) == 0 {
+		// 未配置多集群映射:单集群兼容模式
+		fc, aerr := newAgent(cfg.ClusterAgentURL)
+		if aerr != nil {
+			log.Error("cluster-agent client init failed", "err", aerr)
+			os.Exit(1)
+		}
+		fallback = fc
+	}
+	agents := agentclient.NewRegistry(byCluster, fallback)
+	if len(byCluster) > 0 {
+		log.Info("cluster-agent routing enabled", "clusters", agents.Clusters(), "mtls", cfg.AgentMTLSEnabled)
 	} else {
-		agent = agentclient.New(cfg.ClusterAgentURL)
+		log.Info("cluster-agent single-cluster mode", "url", cfg.ClusterAgentURL, "mtls", cfg.AgentMTLSEnabled)
 	}
 
 	// ---- 组件装配 ----
-	gw := gateway.New(st, agent, rawStore, metrics, log)
+	gw := gateway.New(st, agents, rawStore, metrics, log)
 	mgr := incident.New(st, cfg.CorrelationWindowSec, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
 		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)

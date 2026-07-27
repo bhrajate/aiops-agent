@@ -26,10 +26,12 @@ type Config struct {
 	TemporalQueue    string
 
 	// 组件互联
-	ClusterAgentURL string
-	InternalURL     string // 供 AI Worker 回写的内部 API base(下发给 workflow)
-	ClusterID       string
-	Tenant          string
+	ClusterAgentURL string // 单集群兼容:仅当未配置 ClusterAgents 时生效
+	// 多集群:cluster_id=url 逗号分隔,如 "prod-cn-1=https://a:9100,edge-eu-2=https://b:9100"
+	ClusterAgents string
+	InternalURL   string // 供 AI Worker 回写的内部 API base(下发给 workflow)
+	ClusterID     string
+	Tenant        string
 
 	// 认证(SECURITY §1)
 	AuthMode     string // hs256 | oidc | disabled
@@ -115,6 +117,7 @@ func Load() Config {
 		TemporalNS:       getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
 		TemporalQueue:    getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
 		ClusterAgentURL:  getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
+		ClusterAgents:    getenv("AIOPS_CLUSTER_AGENTS", ""),
 		InternalURL:      getenv("AIOPS_CONTROL_INTERNAL_URL", "http://localhost:8090"),
 		ClusterID:        getenv("AIOPS_CLUSTER_ID", "prod-cn-1"),
 		Tenant:           getenv("AIOPS_TENANT", "default"),
