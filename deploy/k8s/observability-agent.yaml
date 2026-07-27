@@ -1,0 +1,114 @@
+# 中心 Observability Agent(优化 A/C):
+# 一个 observability-only 模式的 cluster-agent —— 只查询多集群共享的
+# Prometheus/Loki/Tempo,不接 K8s API(无 kubeconfig / 无 ServiceAccount token)。
+# 控制面的 Tool Gateway 把 query_metrics/search_logs/get_traces 路由到这里,
+# 不再绕经各集群 agent。观测后端凭据只在此处一份,且**不进 ai-worker**。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observability-agent
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: observability-agent
+    app.kubernetes.io/part-of: aiops
+    app.kubernetes.io/component: observability-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: observability-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: observability-agent
+        app.kubernetes.io/part-of: aiops
+        app.kubernetes.io/component: observability-agent
+    spec:
+      # 不需要 K8s API 访问:显式关闭 token 挂载(最小权限)。
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: observability-agent
+      containers:
+        - name: observability-agent
+          image: ghcr.io/aiops/cluster-agent:v0.1.0   # 同一镜像,observability-only 配置
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AIOPS_DATASOURCE
+              value: "live"
+            - name: AIOPS_CLUSTER_AGENT_ADDR
+              value: ":9100"
+            # 观测后端地址与凭据(中心共享)——从 Secret 注入,仅此一份。
+            - name: AIOPS_PROM_URL
+              valueFrom: { secretKeyRef: { name: aiops-observability, key: prom_url } }
+            - name: AIOPS_LOKI_URL
+              valueFrom: { secretKeyRef: { name: aiops-observability, key: loki_url } }
+            - name: AIOPS_TEMPO_URL
+              valueFrom: { secretKeyRef: { name: aiops-observability, key: tempo_url } }
+            # 共享后端区分集群的 label 名(必配,否则跨集群串数据)。
+            - name: AIOPS_CLUSTER_LABEL
+              value: "cluster"
+            # 显式不配 kubeconfig → K8s 工具在此实例上优雅降级为 unavailable。
+          ports:
+            - name: tools
+              containerPort: 9100
+            - name: health
+              containerPort: 9101
+          readinessProbe:
+            httpGet: { path: /healthz, port: health, scheme: HTTP }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: health, scheme: HTTP }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observability-agent
+  namespace: aiops
+  labels:
+    app.kubernetes.io/name: observability-agent
+    app.kubernetes.io/part-of: aiops
+spec:
+  selector:
+    app.kubernetes.io/name: observability-agent
+  ports:
+    - name: tools
+      port: 9100
+      targetPort: tools
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: observability-agent-pdb
+  namespace: aiops
+  labels:
+    app.kubernetes.io/part-of: aiops
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: observability-agent

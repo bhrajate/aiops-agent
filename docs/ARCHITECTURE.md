@@ -68,6 +68,6 @@
 | **多集群** | 每集群一个只读 Agent | ✅ 已实现:`AIOPS_CLUSTER_AGENTS`(cluster_id→URL 映射)+ Gateway 按 `incident.cluster_id` 路由;未配置的集群**拒绝**工具调用(`no_agent_for_cluster`)而非回退,避免跨集群误读。未配置映射时退化为单集群兼容模式 | 已闭合 |
 | **Cluster Agent 形态** | 推拉结合(含主动上报 Signal) | **仅 pull**:被动 HTTP 工具服务,无主动上报、无 K8s Event watch。瞬时事件若超出查询时间窗或被 K8s 回收即不可得 | 功能未实现 |
 | **证据时间窗** | 按需 | 由 `incident.first_seen` 推导(前置 15 分钟基线,上限 24h);模型不能自定义时间范围 | 已改进,仍非模型可控 |
-| **观测后端隔离** | 每集群一套 | Prometheus/Loki 查询强制注入 `namespace`,**未注入 `cluster` label**。共享后端(Thanos/Mimir)场景下,不同集群同名 namespace 会混淆 | 共享后端场景隔离不完整 |
+| **观测后端隔离** | 每集群一套 或 中心共享 | ✅ **两点已闭合**:①查询强制注入 `namespace` + `cluster`(`AIOPS_CLUSTER_LABEL`,AST 级,拒绝跨集群 matcher);②**按数据源归属路由**:观测类工具(query_metrics/search_logs/get_traces)走中心 Observability Agent(`AIOPS_OBSERVABILITY_AGENT_URL`),不再绕经集群 agent;K8s 类仍走集群 agent。凭据集中一份、不进 ai-worker | 已闭合 |
 
 生产验收的逐项落地状态见 [ACCEPTANCE.md](ACCEPTANCE.md)。

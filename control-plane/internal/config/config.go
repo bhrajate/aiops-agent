@@ -29,9 +29,13 @@ type Config struct {
 	ClusterAgentURL string // 单集群兼容:仅当未配置 ClusterAgents 时生效
 	// 多集群:cluster_id=url 逗号分隔,如 "prod-cn-1=https://a:9100,edge-eu-2=https://b:9100"
 	ClusterAgents string
-	InternalURL   string // 供 AI Worker 回写的内部 API base(下发给 workflow)
-	ClusterID     string
-	Tenant        string
+	// 中心 Observability Agent 地址(查询共享 Prometheus/Loki/Tempo)。
+	// 配置后,观测类工具(query_metrics/search_logs/get_traces)路由到此端点,
+	// 不再绕经集群 agent;为空则观测类工具回退到集群 agent(每集群自带后端的拓扑)。
+	ObservabilityAgentURL string
+	InternalURL           string // 供 AI Worker 回写的内部 API base(下发给 workflow)
+	ClusterID             string
+	Tenant                string
 
 	// 认证(SECURITY §1)
 	AuthMode     string // hs256 | oidc | disabled
@@ -130,19 +134,20 @@ func Load() Config {
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
 	return Config{
-		Env:              getenv("AIOPS_ENV", "development"),
-		PublicAddr:       getenv("AIOPS_PUBLIC_ADDR", ":8088"),
-		InternalAddr:     getenv("AIOPS_INTERNAL_ADDR", ":8090"),
-		DBDSN:            getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
-		KafkaBrokers:     brokers,
-		TemporalHostPort: getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
-		TemporalNS:       getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
-		TemporalQueue:    getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
-		ClusterAgentURL:  getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
-		ClusterAgents:    getenv("AIOPS_CLUSTER_AGENTS", ""),
-		InternalURL:      getenv("AIOPS_CONTROL_INTERNAL_URL", "http://localhost:8090"),
-		ClusterID:        getenv("AIOPS_CLUSTER_ID", "prod-cn-1"),
-		Tenant:           getenv("AIOPS_TENANT", "default"),
+		Env:                   getenv("AIOPS_ENV", "development"),
+		PublicAddr:            getenv("AIOPS_PUBLIC_ADDR", ":8088"),
+		InternalAddr:          getenv("AIOPS_INTERNAL_ADDR", ":8090"),
+		DBDSN:                 getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
+		KafkaBrokers:          brokers,
+		TemporalHostPort:      getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
+		TemporalNS:            getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
+		TemporalQueue:         getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
+		ClusterAgentURL:       getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
+		ClusterAgents:         getenv("AIOPS_CLUSTER_AGENTS", ""),
+		ObservabilityAgentURL: getenv("AIOPS_OBSERVABILITY_AGENT_URL", ""),
+		InternalURL:           getenv("AIOPS_CONTROL_INTERNAL_URL", "http://localhost:8090"),
+		ClusterID:             getenv("AIOPS_CLUSTER_ID", "prod-cn-1"),
+		Tenant:                getenv("AIOPS_TENANT", "default"),
 
 		AuthMode:     getenv("AIOPS_AUTH_MODE", "hs256"),
 		HS256Secret:  getenv("AIOPS_AUTH_HS256_SECRET", DefaultHS256Secret),

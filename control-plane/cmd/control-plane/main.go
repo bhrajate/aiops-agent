@@ -154,8 +154,28 @@ func main() {
 		log.Info("cluster-agent single-cluster mode", "url", cfg.ClusterAgentURL, "mtls", cfg.AgentMTLSEnabled)
 	}
 
+	// ---- 中心 Observability Agent(查询共享 Prometheus/Loki/Tempo)----
+	// 观测后端是多集群共用的中心服务,不在任一集群内:凭据集中一份、
+	// 不进 ai-worker,查询仍经 Gateway 强制范围注入与审计。
+	var obsInvoker gateway.ToolInvoker
+	if cfg.ObservabilityAgentURL != "" {
+		if cfg.AgentMTLSEnabled {
+			oc, oerr := agentclient.NewMTLS(cfg.ObservabilityAgentURL, mtls)
+			if oerr != nil {
+				log.Error("observability agent mTLS init failed", "err", oerr)
+				os.Exit(1)
+			}
+			obsInvoker = oc
+		} else {
+			obsInvoker = agentclient.New(cfg.ObservabilityAgentURL)
+		}
+		log.Info("observability queries routed to central agent", "url", cfg.ObservabilityAgentURL)
+	} else {
+		log.Info("observability queries use per-cluster agents (no central observability agent configured)")
+	}
+
 	// ---- 组件装配 ----
-	gw := gateway.New(st, agents, rawStore, metrics, log)
+	gw := gateway.New(st, agents, obsInvoker, rawStore, metrics, log)
 	mgr := incident.New(st, cfg.CorrelationWindowSec, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
 		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)
