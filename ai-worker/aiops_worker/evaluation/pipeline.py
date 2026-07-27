@@ -31,7 +31,11 @@ from ..contracts import (
 )
 from ..model_gateway.base import ModelProvider
 from ..model_gateway.mock import MockProvider
-from ..policy import build_diagnosis, evaluate_deep_rca_policy
+from ..policy import (
+    build_diagnosis,
+    enforce_evidence_grounding,
+    evaluate_deep_rca_policy,
+)
 
 
 @dataclass
@@ -47,6 +51,8 @@ class ReplayOutcome:
     diagnosis: Optional[DiagnosisResult] = None
     escalated: bool = False
     first_diag_sec: float = 0.0
+    # How many asserted root causes the evidence-first guard had to reject.
+    ungrounded_downgraded: int = 0
 
     @property
     def realtime_evidence_ids(self) -> set[str]:
@@ -134,6 +140,11 @@ class OfflineReplayPipeline:
             synthesis, _ = await self._provider.synthesize(
                 context, evidences, [], round_index
             )
+            # Replay the runtime evidence-first guard so offline scores reflect
+            # what production would actually publish (F2). Without this, an
+            # evaluation run could pass a gate the runtime would refuse.
+            synthesis, downgraded = enforce_evidence_grounding(synthesis, evidences)
+            outcome.ungrounded_downgraded += len(downgraded)
 
             if synthesis.has_supported_conclusion:
                 break

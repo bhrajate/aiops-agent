@@ -134,11 +134,7 @@ func (i *Ingress) fromAlertmanager(raw map[string]json.RawMessage) []model.Signa
 			SignalType: sigType,
 			ClusterID:  cluster,
 			Severity:   al.Labels["severity"],
-			ResourceRef: model.ResourceRef{
-				Namespace: al.Labels["namespace"],
-				Kind:      firstNonEmpty(al.Labels["kind"], "Deployment"),
-				Name:      firstNonEmpty(al.Labels["deployment"], al.Labels["pod"], al.Labels["service"], al.Labels["job"]),
-			},
+			ResourceRef: resourceFromAlertLabels(al.Labels),
 			Labels: al.Labels,
 		}
 		if !al.StartsAt.IsZero() {
@@ -152,6 +148,40 @@ func (i *Ingress) fromAlertmanager(raw map[string]json.RawMessage) []model.Signa
 		out = append(out, sig)
 	}
 	return out
+}
+
+// resourceFromAlertLabels 从 Alertmanager 标签推导资源引用。
+//
+// Kind 必须与 Name 的来源一致:旧实现把 Kind 固定为 "Deployment",但 Name 可能取自
+// `pod` 标签,于是一个 Pod 被标成 Deployment —— 下游 model.ServiceKey 因此不会把
+// Pod 名归约到工作负载,同一服务的多个 Pod 会被算成多个服务,虚高 blast_radius。
+//
+// 优先取服务级标签(deployment/statefulset/…),取不到才退到 pod;
+// 显式 `kind` 标签优先级最高(上游已明确告知类型)。
+func resourceFromAlertLabels(l map[string]string) model.ResourceRef {
+	ref := model.ResourceRef{Namespace: l["namespace"]}
+	// 服务级优先,最后才是 pod —— 顺序即优先级。
+	for _, c := range []struct{ label, kind string }{
+		{"deployment", "Deployment"},
+		{"statefulset", "StatefulSet"},
+		{"daemonset", "DaemonSet"},
+		{"job", "Job"},
+		{"service", "Service"},
+		{"pod", "Pod"},
+		{"node", "Node"},
+	} {
+		if v := l[c.label]; v != "" {
+			ref.Name, ref.Kind = v, c.kind
+			break
+		}
+	}
+	if k := l["kind"]; k != "" {
+		ref.Kind = k // 上游显式声明的类型优先
+	}
+	if ref.Kind == "" {
+		ref.Kind = "Deployment" // 无任何线索时的历史缺省
+	}
+	return ref
 }
 
 // fill 填充缺省字段:signal_id、tenant、cluster、labels、payload_hash、received_at。

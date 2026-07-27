@@ -13,9 +13,13 @@ export interface ResourceRef {
 
 export interface BlastRadius {
   namespaces: number
-  // 后端实际返回 resources;services 为早期契约命名,保留可选兼容
-  resources?: number
+  // 三个维度语义不同(后端 store/alertgroups.go):
+  //   services  受影响的服务数(Pod 已归约到所属工作负载)—— 驱动深度 RCA 闸门
+  //   resources 受影响的具体资源数(Pod 级)
+  //   groups    去重单元数(告警规则×资源),反映噪声量级
   services?: number
+  resources?: number
+  groups?: number
 }
 
 export interface Incident {

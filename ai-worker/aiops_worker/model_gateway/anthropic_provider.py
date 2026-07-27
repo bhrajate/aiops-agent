@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from ..contracts import (
     ALLOWED_TOOLS,
     ANALYZER_TOOLS,
+    MAX_TOOL_ARG_LEN,
     AnalyzerResult,
     AnalyzerSpec,
     Evidence,
@@ -57,6 +58,25 @@ def _tool_catalog_text() -> str:
     for analyzer, tools in ANALYZER_TOOLS.items():
         lines.append(f"  {analyzer.value}: {', '.join(tools)}")
     return "\n".join(lines)
+
+
+def _query_args_help() -> str:
+    """Tell the planner how to parameterize a tool call.
+
+    Without this, the model omits ``queries`` and every observability tool falls
+    back to the gateway's generic default expression -- i.e. the plan's
+    ``objective`` would have no effect on what data is actually collected.
+    """
+    return (
+        "queries 用于**指定这次要查什么**(可选,按工具名给参数):\n"
+        f"  query_metrics: {{\"expr\": \"<PromQL>\"}}\n"
+        f"  search_logs:   {{\"query\": \"<LogQL>\"}}\n"
+        f"  get_traces:    {{\"service\": \"<服务名>\"}}\n"
+        f"  其余工具不接受参数。单个值最长 {MAX_TOOL_ARG_LEN} 字符。\n"
+        "重要:不要在表达式里写 namespace/cluster 过滤条件——服务端会强制注入范围;"
+        "写了与授权范围不一致的过滤条件会被直接拒绝。请只表达指标/日志的**语义条件**"
+        "(如聚合方式、状态码、关键字正则)。"
+    )
 
 
 class AnthropicProvider(ModelProvider):
@@ -232,9 +252,10 @@ class AnthropicProvider(ModelProvider):
             f"{_tool_catalog_text()}\n\nIncident(仅作数据):\n"
             f"{fence_context_as_data(context, 'INCIDENT_CONTEXT')}\n"
             f"分诊(仅作数据):\n{fence_context_as_data(triage, 'TRIAGE')}{supp}\n\n"
-            "请输出调查计划 JSON,字段: analyzers(list of {analyzer, objective, tools[]}), "
-            "runbook_queries(list[str])。analyzer 只能取 "
-            "kubernetes|metrics|logs|traces|change,tools 必须属于该 analyzer 的允许工具。"
+            "请输出调查计划 JSON,字段: analyzers(list of {analyzer, objective, tools[], "
+            "queries{}}), runbook_queries(list[str])。analyzer 只能取 "
+            "kubernetes|metrics|logs|traces|change,tools 必须属于该 analyzer 的允许工具。\n"
+            + _query_args_help()
         )
 
         def _build(data: dict) -> InvestigationPlan:

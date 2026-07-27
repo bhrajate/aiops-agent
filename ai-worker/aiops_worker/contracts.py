@@ -63,6 +63,22 @@ ALLOWED_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+# Which argument keys each tool accepts from the planner. Anything else is
+# dropped by :func:`validate_plan` -- the planner may narrow *what* is asked,
+# never *where* it is asked (scope stays gateway-injected).
+#
+# Tools absent from this map take no planner arguments at all (the K8s tools are
+# purely scope-driven), so passing any is a plan violation.
+TOOL_ARG_KEYS: dict[str, tuple[str, ...]] = {
+    "query_metrics": ("expr",),   # PromQL; gateway injects cluster/namespace at AST level
+    "search_logs": ("query",),    # LogQL; gateway injects stream selectors
+    "get_traces": ("service",),   # service.name tag; gateway forces namespace/cluster tags
+}
+
+# Upper bound on a single planner-supplied argument value. A model that emits a
+# runaway expression must not turn into a runaway backend query string.
+MAX_TOOL_ARG_LEN = 512
+
 # Which tools each analyzer is permitted to invoke. Enforced in activities.
 ANALYZER_TOOLS: dict[AnalyzerType, tuple[str, ...]] = {
     AnalyzerType.KUBERNETES: ("get_workload_state", "get_kubernetes_events"),
@@ -207,6 +223,9 @@ class Usage(BaseModel):
     tokens: int = 0
     cost_usd: float = 0.0
     tool_calls: int = 0
+    # Count of SUPPORTED hypotheses deterministically downgraded for lacking
+    # real-time evidence. Not a budget dimension -- a quality signal.
+    ungrounded_downgrades: int = 0
 
     def add_model_usage(self, tokens: int, cost_usd: float) -> None:
         self.tokens += int(tokens)
@@ -271,12 +290,27 @@ class TriageResult(BaseModel):
 
 class AnalyzerSpec(BaseModel):
     """One analyzer step in a plan. ``tools`` must be a subset of that
-    analyzer's allow-listed tools (validated in :func:`validate_plan`)."""
+    analyzer's allow-listed tools (validated in :func:`validate_plan`).
+
+    ``queries`` lets the planner *parameterize* a tool call (which PromQL to
+    evaluate, which LogQL to grep, which service to search traces for) instead
+    of always falling back to the gateway's generic default. Keys are tool
+    names; values are argument maps restricted to :data:`TOOL_ARG_KEYS`.
+    The Tool Gateway still owns scope: it force-injects cluster/namespace
+    matchers at the AST level and rejects cross-scope matchers, so a
+    parameterized query can narrow the question but never widen the blast
+    radius (architecture 9.2 / 14.2).
+    """
 
     model_config = ConfigDict(extra="allow")
     analyzer: AnalyzerType
     objective: str = ""
     tools: list[str] = Field(default_factory=list)
+    queries: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    def args_for(self, tool: str) -> dict[str, Any]:
+        """Validated arguments for ``tool`` (empty when unparameterized)."""
+        return dict(self.queries.get(tool) or {})
 
 
 class InvestigationPlan(BaseModel):
@@ -346,11 +380,17 @@ class WorkflowResult(BaseModel):
 
 
 def validate_plan(plan: InvestigationPlan) -> InvestigationPlan:
-    """Enforce that the planner only selected allowed analyzers/tools.
+    """Enforce that the planner only selected allowed analyzers/tools/arguments.
 
     Guards against a compromised/hallucinated model trying to invoke tools
     outside the allow list (architecture 9.2 / 14.2). Raises ValueError on
     violation; callers treat that as a hard policy failure.
+
+    Tool *arguments* are sanitized rather than rejected: an unknown/oversized
+    argument key is dropped so the call degrades to the gateway default instead
+    of failing the whole plan. A reference to an unknown tool -- or a tool the
+    analyzer may not use -- is still a hard error, because that signals the
+    model is trying to escape its grant rather than merely over-specifying.
     """
     for spec in plan.analyzers:
         allowed = set(ANALYZER_TOOLS.get(spec.analyzer, ()))
@@ -361,4 +401,30 @@ def validate_plan(plan: InvestigationPlan) -> InvestigationPlan:
                 raise ValueError(
                     f"analyzer {spec.analyzer.value!r} may not use tool {tool!r}"
                 )
+        spec.queries = _sanitize_queries(spec.queries, spec.tools)
     return plan
+
+
+def _sanitize_queries(
+    queries: dict[str, dict[str, Any]], tools: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Keep only argument maps for tools in this spec, with allow-listed keys,
+    string values, and bounded length. Everything else is dropped."""
+    clean: dict[str, dict[str, Any]] = {}
+    for tool, args in (queries or {}).items():
+        if tool not in tools:
+            continue  # arguments for a tool this analyzer isn't running
+        keys = TOOL_ARG_KEYS.get(tool)
+        if not keys or not isinstance(args, dict):
+            continue  # tool takes no planner arguments (e.g. K8s tools)
+        kept: dict[str, Any] = {}
+        for k in keys:
+            v = args.get(k)
+            if not isinstance(v, str):
+                continue
+            v = v.strip()
+            if v and len(v) <= MAX_TOOL_ARG_LEN:
+                kept[k] = v
+        if kept:
+            clean[tool] = kept
+    return clean

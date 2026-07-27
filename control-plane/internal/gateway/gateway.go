@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aiops/control-plane/internal/agentclient"
@@ -41,6 +42,44 @@ var evidenceType = map[string]string{
 	"list_recent_changes":   "change",
 	"inspect_dependencies":  "kubernetes",
 	"retrieve_runbook":      "knowledge",
+}
+
+// toolArgKeys 每个工具允许由**调用方(模型/Worker)**提供的参数键。
+// 这是与 ai-worker `TOOL_ARG_KEYS` 对应的服务端副本——Gateway 是策略边界,
+// 不能依赖 Worker 已经过滤过(Worker 侧过滤只是快速失败)。
+// 不在表中的工具(K8s 类)不接受任何调用方参数:它们完全由注入的 scope 驱动。
+//
+// 注意:这里放行的只是"问什么",不是"在哪问"。cluster/namespace 等范围约束由
+// obsquery 在 AST/流选择器层面强制注入,调用方无法通过这些参数扩大范围。
+var toolArgKeys = map[string][]string{
+	"query_metrics": {"expr"},    // PromQL
+	"search_logs":   {"query"},   // LogQL
+	"get_traces":    {"service"}, // service.name tag
+}
+
+// maxToolArgLen 单个调用方参数值上限,防止超长表达式打到后端。
+const maxToolArgLen = 512
+
+// sanitizeToolArgs 只保留该工具允许的参数键,且值必须是长度受限的非空字符串。
+// 其余一律丢弃(降级为后端默认查询),而不是报错——避免模型一处笔误让整轮采集失败。
+func sanitizeToolArgs(tool string, in map[string]any) map[string]any {
+	keys, ok := toolArgKeys[tool]
+	if !ok {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(keys))
+	for _, k := range keys {
+		s, isStr := in[k].(string)
+		if !isStr {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || len(s) > maxToolArgLen {
+			continue
+		}
+		out[k] = s
+	}
+	return out
 }
 
 // observabilityTools 是查询"共享观测后端"的工具。这些数据源(Prometheus/Loki/Tempo)
@@ -177,10 +216,13 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 		return g.runbook(ctx, tenant, req, inc)
 	}
 
-	// 4) Schema 校验(基础:参数必须是对象;限制时间跨度由 scope 决定)
+	// 4) Schema 校验:参数必须是对象;调用方参数按工具白名单收窄。
+	//    时间跨度由 scope 决定,调用方不可指定。
 	if req.Arguments == nil {
 		req.Arguments = map[string]any{}
 	}
+	// 只放行该工具允许的"问什么"参数;范围类参数一律丢弃(scope 由服务端注入)。
+	callerArgs := sanitizeToolArgs(req.Tool, req.Arguments)
 
 	// 5) 按数据源归属分派:
 	//    - 观测类(query_metrics/search_logs/get_traces):共享中心后端,控制面直连;
@@ -193,14 +235,15 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 			g.deny(ctx, tenant, req, "observability_backend_not_configured")
 			return InvokeResult{Status: "denied", Reason: "observability_backend_not_configured"}, nil
 		}
-		res, err = g.invokeObservability(ctx, req.Tool, req.Arguments, scope)
+		res, err = g.invokeObservability(ctx, req.Tool, callerArgs, scope)
 	} else {
 		agent, aerr := g.agents.For(scope.ClusterID)
 		if aerr != nil {
 			g.deny(ctx, tenant, req, "no_agent_for_cluster")
 			return InvokeResult{Status: "denied", Reason: "no_agent_for_cluster"}, nil
 		}
-		res, err = agent.Invoke(ctx, req.Tool, req.Arguments, scope)
+		// K8s 类工具不接受调用方参数(callerArgs 必为空),完全由 scope 驱动。
+		res, err = agent.Invoke(ctx, req.Tool, callerArgs, scope)
 	}
 	elapsed := time.Since(start)
 	if err != nil {
@@ -240,7 +283,8 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 		Type:            evidenceType[req.Tool],
 		Source:          res.Source,
 		ToolName:        req.Tool,
-		Query:           map[string]any{"arguments": req.Arguments, "scope": scope},
+		// 记录**实际生效**的调用方参数(而非原始请求),使 Evidence.query 可复现。
+		Query:           map[string]any{"arguments": callerArgs, "scope": scope},
 		TimeRange:       scope.TimeRange,
 		Summary:         res.Summary,
 		RawRef:          rawRef,

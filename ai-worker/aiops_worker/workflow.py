@@ -86,12 +86,25 @@ def _clip_analyzers_to_budget(
         room = remaining - used
         if room <= 0:
             break
+        # Keep only the query args belonging to tools that survive clipping, so a
+        # clipped spec can't carry arguments for a tool it will never invoke.
         if len(effective) <= room:
-            clipped.append(spec.model_copy(update={"tools": effective}))
+            kept = effective
             used += len(effective)
+            stop = False
         else:
-            clipped.append(spec.model_copy(update={"tools": effective[:room]}))
+            kept = effective[:room]
             used += room
+            stop = True
+        clipped.append(
+            spec.model_copy(
+                update={
+                    "tools": kept,
+                    "queries": {t: a for t, a in spec.queries.items() if t in kept},
+                }
+            )
+        )
+        if stop:
             break
     return clipped
 
@@ -322,6 +335,20 @@ class InvestigationWorkflow:
                 syn_out.usage.total_tokens, syn_out.usage.cost_usd
             )
             last_synthesis = syn_out.synthesis
+            # An ungrounded "supported" claim is a model-quality signal, not an
+            # implementation detail: record it so reviewers can see the pipeline
+            # refused an unproven root cause instead of silently publishing it.
+            if syn_out.ungrounded_downgraded:
+                self._usage.ungrounded_downgrades += len(syn_out.ungrounded_downgraded)
+                await self._emit(
+                    inp,
+                    "hypothesis_downgraded",
+                    {
+                        "reason": "no_realtime_evidence",
+                        "hypothesis_ids": syn_out.ungrounded_downgraded,
+                        "round": round_index,
+                    },
+                )
 
             # This collection round is now complete -- account for it.
             round_index += 1

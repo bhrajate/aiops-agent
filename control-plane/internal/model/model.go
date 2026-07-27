@@ -74,6 +74,9 @@ type Usage struct {
 	Tokens     int     `json:"tokens"`
 	CostUSD    float64 `json:"cost_usd"`
 	ToolCalls  int     `json:"tool_calls"`
+	// UngroundedDowngrades 计数被确定性降级的"无实时证据支撑"结论(evidence-first
+	// 不变量)。>0 表示模型这轮声称已确认但拿不出实时证据,是模型质量信号。
+	UngroundedDowngrades int `json:"ungrounded_downgrades"`
 }
 
 type Investigation struct {

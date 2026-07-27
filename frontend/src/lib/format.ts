@@ -55,8 +55,12 @@ import type { BlastRadius } from '@/api/types'
 export function formatBlastRadius(b?: BlastRadius): string {
   if (!b) return '—'
   const parts: string[] = []
-  const count = b.resources ?? b.services
-  if (count !== undefined) parts.push(`${count} 资源`)
+  // 服务数是影响面的主口径(单服务多 Pod 不应显示为多个服务);
+  // 资源数在与服务数不同时补充展示,避免丢掉 Pod 级细节。
+  if (b.services !== undefined) parts.push(`${b.services} 服务`)
+  if (b.resources !== undefined && b.resources !== b.services) {
+    parts.push(`${b.resources} 资源`)
+  }
   if (b.namespaces !== undefined) parts.push(`${b.namespaces} 命名空间`)
   return parts.length ? parts.join(' / ') : '—'
 }

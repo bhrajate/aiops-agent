@@ -37,10 +37,16 @@ _SCENARIOS: dict[str, dict] = {
         "triage": "近期发布后 checkout 服务 5xx 错误率显著上升,疑似新版本回归。",
         "statement": "新版本引入的连接池/依赖调用变更导致请求排队与错误率飙升。",
         "analyzers": [
-            (AnalyzerType.CHANGE, "定位最近一次发布/配置变更及其时间点", ["list_recent_changes"]),
-            (AnalyzerType.METRICS, "对比新旧版本实例的错误率与延迟", ["query_metrics"]),
-            (AnalyzerType.LOGS, "检索新版本实例的错误日志与异常栈", ["search_logs"]),
-            (AnalyzerType.KUBERNETES, "确认新版本 ReplicaSet 与滚动发布状态", ["get_workload_state", "get_kubernetes_events"]),
+            (AnalyzerType.CHANGE, "定位最近一次发布/配置变更及其时间点", ["list_recent_changes"], {}),
+            (AnalyzerType.METRICS, "对比新旧版本实例的错误率与延迟", ["query_metrics"], {
+                "query_metrics": {
+                    "expr": 'sum by (version) (rate(http_requests_total{status=~"5.."}[5m]))'
+                }
+            }),
+            (AnalyzerType.LOGS, "检索新版本实例的错误日志与异常栈", ["search_logs"], {
+                "search_logs": {"query": '{} |~ "(?i)(exception|stack trace|5[0-9][0-9])"'}
+            }),
+            (AnalyzerType.KUBERNETES, "确认新版本 ReplicaSet 与滚动发布状态", ["get_workload_state", "get_kubernetes_events"], {}),
         ],
         "runbooks": ["checkout 发布回滚手册", "5xx 错误率突增排查手册"],
         "missing": ["新旧版本实例级连接池等待时间指标"],
@@ -50,9 +56,15 @@ _SCENARIOS: dict[str, dict] = {
         "triage": "工作负载出现 CPU/内存饱和与限流,疑似资源不足或泄漏导致性能劣化。",
         "statement": "Pod 资源达到 limit 触发 CPU throttling / OOMKill,导致延迟升高与重启。",
         "analyzers": [
-            (AnalyzerType.KUBERNETES, "检查 Pod 重启、OOMKilled 与资源 limit", ["get_workload_state", "get_kubernetes_events"]),
-            (AnalyzerType.METRICS, "查看 CPU/内存使用率与 throttling 指标", ["query_metrics"]),
-            (AnalyzerType.LOGS, "检索 OOM 与 GC/内存告警日志", ["search_logs"]),
+            (AnalyzerType.KUBERNETES, "检查 Pod 重启、OOMKilled 与资源 limit", ["get_workload_state", "get_kubernetes_events"], {}),
+            (AnalyzerType.METRICS, "查看 CPU/内存使用率与 throttling 指标", ["query_metrics"], {
+                "query_metrics": {
+                    "expr": "sum by (pod) (rate(container_cpu_cfs_throttled_seconds_total[5m]))"
+                }
+            }),
+            (AnalyzerType.LOGS, "检索 OOM 与 GC/内存告警日志", ["search_logs"], {
+                "search_logs": {"query": '{} |~ "(?i)(oom|out of memory|gc pause)"'}
+            }),
         ],
         "runbooks": ["资源饱和与扩容手册", "OOMKilled 排查手册"],
         "missing": ["历史内存增长曲线以区分泄漏与突增流量"],
@@ -62,9 +74,17 @@ _SCENARIOS: dict[str, dict] = {
         "triage": "下游依赖(数据库/中间件/外部服务)异常,错误沿调用链向上传播。",
         "statement": "关键下游依赖不可用或超时,导致上游服务级联失败。",
         "analyzers": [
-            (AnalyzerType.TRACES, "沿调用链定位首个高延迟/报错的依赖", ["get_traces", "inspect_dependencies"]),
-            (AnalyzerType.METRICS, "查看依赖的错误率、超时与饱和度", ["query_metrics"]),
-            (AnalyzerType.LOGS, "检索连接超时/拒绝连接类错误", ["search_logs"]),
+            (AnalyzerType.TRACES, "沿调用链定位首个高延迟/报错的依赖", ["get_traces", "inspect_dependencies"], {
+                "get_traces": {"service": "auth-service"}
+            }),
+            (AnalyzerType.METRICS, "查看依赖的错误率、超时与饱和度", ["query_metrics"], {
+                "query_metrics": {
+                    "expr": 'histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))'
+                }
+            }),
+            (AnalyzerType.LOGS, "检索连接超时/拒绝连接类错误", ["search_logs"], {
+                "search_logs": {"query": '{} |~ "(?i)(timeout|connection refused|upstream)"'}
+            }),
         ],
         "runbooks": ["依赖级联故障处置手册", "数据库连接超时排查手册"],
         "missing": ["下游依赖侧的服务端指标与容量水位"],
@@ -74,9 +94,11 @@ _SCENARIOS: dict[str, dict] = {
         "triage": "疑似配置/环境变量错误导致服务启动或运行异常。",
         "statement": "错误的配置项(如连接串、开关、密钥引用)导致服务行为异常。",
         "analyzers": [
-            (AnalyzerType.CHANGE, "定位最近的配置(ConfigMap/Secret)变更", ["list_recent_changes"]),
-            (AnalyzerType.KUBERNETES, "检查 CrashLoop、配置挂载与启动事件", ["get_workload_state", "get_kubernetes_events"]),
-            (AnalyzerType.LOGS, "检索配置解析失败/校验错误日志", ["search_logs"]),
+            (AnalyzerType.CHANGE, "定位最近的配置(ConfigMap/Secret)变更", ["list_recent_changes"], {}),
+            (AnalyzerType.KUBERNETES, "检查 CrashLoop、配置挂载与启动事件", ["get_workload_state", "get_kubernetes_events"], {}),
+            (AnalyzerType.LOGS, "检索配置解析失败/校验错误日志", ["search_logs"], {
+                "search_logs": {"query": '{} |~ "(?i)(invalid config|unmarshal|missing (env|key)|parse error)"'}
+            }),
         ],
         "runbooks": ["配置变更回滚手册", "CrashLoopBackOff 排查手册"],
         "missing": ["变更前后配置项 diff"],
@@ -95,6 +117,12 @@ _KEYWORD_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("dependency_failure", ("timeout", "dependency", "database", "downstream", "依赖", "超时", "连接")),
     ("config_error", ("config", "configmap", "secret", "crashloop", "配置", "env")),
 ]
+
+
+def _deepcopy_queries(queries: dict) -> dict:
+    """Copy the scenario table's query args so callers can never mutate the
+    shared table (the mock must stay deterministic across investigations)."""
+    return {tool: dict(args) for tool, args in (queries or {}).items()}
 
 
 def _estimate_usage(*texts: str, out_len: int = 300) -> ModelUsage:
@@ -188,12 +216,14 @@ class MockProvider(ModelProvider):
             )
         elif supplemental_from is not None:
             # Supplemental round: target the missing evidence with 1 analyzer.
+            a, _obj, tools, queries = sc["analyzers"][1]
             plan = InvestigationPlan(
                 analyzers=[
                     AnalyzerSpec(
-                        analyzer=sc["analyzers"][1][0],
+                        analyzer=a,
                         objective="补充采集缺失的关键指标以确认/排除假设",
-                        tools=list(sc["analyzers"][1][2]),
+                        tools=list(tools),
+                        queries=_deepcopy_queries(queries),
                     )
                 ],
                 runbook_queries=[],
@@ -201,8 +231,13 @@ class MockProvider(ModelProvider):
         else:
             plan = InvestigationPlan(
                 analyzers=[
-                    AnalyzerSpec(analyzer=a, objective=obj, tools=list(tools))
-                    for (a, obj, tools) in sc["analyzers"]
+                    AnalyzerSpec(
+                        analyzer=a,
+                        objective=obj,
+                        tools=list(tools),
+                        queries=_deepcopy_queries(queries),
+                    )
+                    for (a, obj, tools, queries) in sc["analyzers"]
                 ],
                 runbook_queries=list(sc["runbooks"]),
             )

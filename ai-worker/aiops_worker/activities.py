@@ -35,7 +35,11 @@ from .contracts import (
 )
 from .internal_api import InternalAPIClient, ToolDenied
 from .model_gateway.base import ModelProvider
-from .policy import build_diagnosis, evaluate_deep_rca_policy
+from .policy import (
+    build_diagnosis,
+    enforce_evidence_grounding,
+    evaluate_deep_rca_policy,
+)
 
 # ---------------------------------------------------------------------------
 # Activity input/output envelopes
@@ -108,6 +112,10 @@ class SynthesizeInput(BaseModel):
 class SynthesizeOutput(BaseModel):
     synthesis: SynthesisResult
     usage: ModelUsage
+    # Hypotheses that claimed SUPPORTED without real-time evidence and were
+    # deterministically downgraded (evidence-first invariant). Non-empty here is
+    # a model-quality signal worth surfacing on the timeline.
+    ungrounded_downgraded: list[str] = Field(default_factory=list)
 
 
 class PublishDiagnosisInput(BaseModel):
@@ -239,12 +247,18 @@ class InvestigationActivities:
                 denied.append(tool)
                 continue
             tool_calls += 1
+            # Planner-supplied query arguments (already sanitized by
+            # validate_plan) let this analyzer ask a *specific* question instead
+            # of falling back to the gateway's generic default. Scope is NOT
+            # negotiable: the gateway re-injects cluster/namespace regardless.
+            arguments: dict = {"analyzer": arg.spec.analyzer.value}
+            arguments.update(arg.spec.args_for(tool))
             try:
                 ev = await client.invoke_tool(
                     investigation_id=arg.investigation_id,
                     incident_id=arg.incident_id,
                     tool=tool,
-                    arguments={"analyzer": arg.spec.analyzer.value},
+                    arguments=arguments,
                     scope=arg.scope or None,
                 )
                 evidences.append(ev)
@@ -267,10 +281,22 @@ class InvestigationActivities:
         synthesis, usage = await self._provider.synthesize(
             arg.context, arg.evidences, arg.analyzer_results, arg.round_index
         )
-        # Persist hypotheses (full replacement) via internal API.
+        # Evidence-first invariant, enforced BEFORE persisting so the business DB
+        # (the source of truth) can never hold an asserted root cause that no
+        # real-time evidence supports. Deterministic -- see policy.py.
+        synthesis, downgraded = enforce_evidence_grounding(synthesis, arg.evidences)
+        if downgraded:
+            activity.logger.warning(
+                "downgraded %d ungrounded supported hypothes(es): %s",
+                len(downgraded),
+                ",".join(downgraded),
+            )
         client = self._client(arg.control_internal_url)
+        # Persist hypotheses (full replacement) via internal API.
         await client.put_hypotheses(arg.investigation_id, synthesis.hypotheses)
-        return SynthesizeOutput(synthesis=synthesis, usage=usage)
+        return SynthesizeOutput(
+            synthesis=synthesis, usage=usage, ungrounded_downgraded=downgraded
+        )
 
     # -- diagnosis -----------------------------------------------------------
 

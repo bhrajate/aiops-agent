@@ -10,6 +10,8 @@ from .contracts import (
     DiagnosisHypothesis,
     DiagnosisResult,
     DiagnosisStatus,
+    Evidence,
+    Hypothesis,
     HypothesisStatus,
     IncidentContext,
     SynthesisResult,
@@ -41,6 +43,66 @@ def evaluate_deep_rca_policy(context: IncidentContext, triage: TriageResult) -> 
     if incident.change_refs or context.changes:
         return True
     return False
+
+
+# Reason recorded on a hypothesis that claimed SUPPORTED without proof.
+UNGROUNDED_DOWNGRADE_REASON = "no_realtime_evidence"
+
+
+def enforce_evidence_grounding(
+    synthesis: SynthesisResult, evidences: list[Evidence]
+) -> tuple[SynthesisResult, list[str]]:
+    """Downgrade any SUPPORTED hypothesis that is not grounded in real-time
+    evidence (architecture 12.2 / 18.1).
+
+    A hypothesis may only assert a root cause (``status=supported``) if it cites
+    at least one piece of **real-time** evidence that actually exists. Reference
+    knowledge (runbooks, ``type=knowledge``) can seed a hypothesis but can never
+    prove one, so a conclusion backed only by a runbook is not a conclusion.
+
+    Without this gate the pipeline trusts the model's self-reported status: a
+    ``supported`` hypothesis citing nothing would flow through
+    ``has_supported_conclusion`` -> CONCLUDED -> ``DiagnosisStatus.RESOLVED``,
+    and the UI would show a confirmed root cause with zero evidence behind it.
+    The offline evaluation gate measures exactly this
+    (``evidence_citation_rate`` / ``hallucination_rate``); this is the runtime
+    counterpart, and it is deterministic on purpose -- the check must not be
+    delegated to the model whose output it is checking.
+
+    Returns the (possibly rewritten) synthesis plus the ids of downgraded
+    hypotheses so the caller can emit an audit event.
+    """
+    realtime_ids = {
+        e.evidence_id for e in evidences if not e.is_reference_knowledge
+    }
+    downgraded: list[str] = []
+    out: list[Hypothesis] = []
+    for h in synthesis.hypotheses:
+        if h.status == HypothesisStatus.SUPPORTED and not (
+            set(h.supporting_evidence_ids) & realtime_ids
+        ):
+            downgraded.append(h.hypothesis_id)
+            # Keep the statement (it may still be the best lead) but strip the
+            # assertion. Record what is missing so the next round has a target;
+            # if the loop is out of budget this surfaces as needs_human.
+            missing = list(h.missing_evidence)
+            want = "支持该结论的实时证据(指标/日志/追踪/K8s 状态)"
+            if want not in missing:
+                missing.append(want)
+            out.append(
+                h.model_copy(
+                    update={
+                        "status": HypothesisStatus.UNRESOLVED,
+                        "missing_evidence": missing,
+                        "downgrade_reason": UNGROUNDED_DOWNGRADE_REASON,
+                    }
+                )
+            )
+        else:
+            out.append(h)
+    if not downgraded:
+        return synthesis, []
+    return synthesis.model_copy(update={"hypotheses": out}), downgraded
 
 
 def build_diagnosis(

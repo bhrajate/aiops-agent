@@ -162,11 +162,17 @@ func recomputeIncidentFromGroups(ctx context.Context, tx pgx.Tx, incidentID stri
 	type agg struct {
 		resources   []model.ResourceRef
 		namespaces  map[string]struct{}
+		services    map[string]struct{}
+		groups      int
 		severity    string
 		signalCount int
 		category    string
 	}
-	a := agg{namespaces: map[string]struct{}{}, severity: "P4"}
+	a := agg{
+		namespaces: map[string]struct{}{},
+		services:   map[string]struct{}{},
+		severity:   "P4",
+	}
 	seen := map[string]struct{}{}
 	for rows.Next() {
 		var refRaw []byte
@@ -179,11 +185,15 @@ func recomputeIncidentFromGroups(ctx context.Context, tx pgx.Tx, incidentID stri
 		}
 		var ref model.ResourceRef
 		_ = json.Unmarshal(refRaw, &ref)
+		a.groups++
 		key := ref.Namespace + "/" + ref.Kind + "/" + ref.Name
 		if _, dup := seen[key]; !dup {
 			seen[key] = struct{}{}
 			a.resources = append(a.resources, ref)
 		}
+		// 服务维度:把 Pod 归约到其所属工作负载,避免"同一服务多个 Pod"
+		// 被当成"多个服务受影响"而误触发深度 RCA(见 model.ServiceKey)。
+		a.services[model.ServiceKey(ref)] = struct{}{}
 		if ns != "" {
 			a.namespaces[ns] = struct{}{}
 		}
@@ -204,10 +214,15 @@ func recomputeIncidentFromGroups(ctx context.Context, tx pgx.Tx, incidentID stri
 	if nsCount < 1 {
 		nsCount = 1
 	}
+	// 三个维度语义不同,不可互相替代:
+	//   services  = 受影响的服务数(Pod 已归约到工作负载)—— 驱动深度 RCA 闸门
+	//   resources = 受影响的具体资源数(Pod 级)—— 展示用
+	//   groups    = 去重单元数(告警规则×资源)—— 噪声量级
 	blast := map[string]any{
-		"services":   len(a.resources),
+		"services":   len(a.services),
 		"namespaces": nsCount,
-		"groups":     len(a.resources),
+		"resources":  len(a.resources),
+		"groups":     a.groups,
 	}
 	_, err = tx.Exec(ctx,
 		`UPDATE incidents SET
