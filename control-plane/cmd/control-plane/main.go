@@ -226,6 +226,18 @@ func main() {
 		}()
 	}
 
+	// ---- 孤儿调查对账(A2,role: trigger)----
+	// 崩溃窗口:CreateInvestigation 与 wf.Start 非原子,之间被杀会留下永远 queued
+	// 且无 run_id 的调查。启动时立即对账一次(覆盖重启恢复),之后周期性扫描。
+	if cfg.HasRole("trigger") {
+		rec := trigger.NewReconciler(st, wf, cfg.InternalURL, cfg.ReconcileGraceSec, log)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec.Run(ctx, time.Duration(cfg.ReconcileIntervalSec)*time.Second)
+		}()
+	}
+
 	// ---- 消费者:incidents → Trigger/Orchestrator(role: trigger)----
 	if cfg.HasRole("trigger") {
 		incConsumer := bus.NewConsumer(cfg.KafkaBrokers, "incidents", "trigger-policy")

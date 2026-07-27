@@ -71,7 +71,10 @@ type Config struct {
 	// 触发策略硬停止(文档 6.3):冷却期与并发上限,防告警风暴/成本失控
 	CooldownSec          int // 同 grouping_key 两次调查最小间隔;<=0 关闭
 	MaxActivePerTenant   int // 每租户同时活跃调查上限;<=0 关闭
-	CorrelationWindowSec int // Incident 相关性影响面聚合时间窗(秒)
+	CorrelationWindowSec int // Incident 相关性合并时间窗(秒)
+	// 孤儿调查对账(A2):创建后多久仍无 run_id 视为孤儿,以及扫描间隔(秒)
+	ReconcileGraceSec    int
+	ReconcileIntervalSec int
 
 	// 可观测性(架构第 16 节)
 	ServiceName  string
@@ -175,6 +178,8 @@ func Load() Config {
 		CooldownSec:          getint("AIOPS_INVESTIGATION_COOLDOWN_SEC", 300),
 		MaxActivePerTenant:   getint("AIOPS_MAX_ACTIVE_INVESTIGATIONS", 20),
 		CorrelationWindowSec: getint("AIOPS_CORRELATION_WINDOW_SEC", 900),
+		ReconcileGraceSec:    getint("AIOPS_RECONCILE_GRACE_SEC", 60),
+		ReconcileIntervalSec: getint("AIOPS_RECONCILE_INTERVAL_SEC", 60),
 
 		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),

@@ -146,7 +146,7 @@ func (o *Orchestrator) StartInvestigation(ctx context.Context, incidentID, trigg
 		TenantID:        tenant,
 		IncidentID:      inc.IncidentID,
 		IncidentVersion: inc.Version,
-		WorkflowID:      fmt.Sprintf("investigation/%s/%d", inc.IncidentID, inc.Version),
+		WorkflowID:      workflowID(inc.IncidentID, inc.Version),
 		Phase:           "queued",
 		TriggerReason:   reason,
 		TriggeredBy:     triggeredBy,
@@ -190,6 +190,12 @@ func (o *Orchestrator) StartInvestigation(ctx context.Context, incidentID, trigg
 		map[string]any{"cluster": inc.ClusterID}, map[string]any{"reason": reason, "workflow_id": inv.WorkflowID})
 	o.log.Info("investigation started", "investigation_id", inv.InvestigationID, "workflow", inv.WorkflowID)
 	return inv, nil
+}
+
+// workflowID 是 Temporal workflow 的稳定 ID(文档 7.2)。
+// 固定推导使重复启动天然幂等(same ID → already-started),孤儿补偿因此可安全重试。
+func workflowID(incidentID string, version int) string {
+	return fmt.Sprintf("investigation/%s/%d", incidentID, version)
 }
 
 // StopError 表示命中硬停止条件。
