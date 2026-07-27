@@ -20,6 +20,17 @@ q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -t -c 
 pass=0; fail=0
 ck(){ if [ "$2" = "$3" ]; then echo "  ✓ $1 ($3)"; pass=$((pass+1)); else echo "  ✗ $1 期望 $2 实得 $3"; fail=$((fail+1)); fi; }
 
+# 前置检查:本脚本**不自己起后端**,依赖已在 8088 运行的实例。
+# 若没有,curl 会静默失败,而断言仍会照着库里的**残留数据**打分——
+# 那样得到的通过/失败都没有意义(曾因此误判为代码回归)。
+if ! curl -sf "$BASE/healthz" >/dev/null 2>&1; then
+  echo "后端未在 $BASE 运行。先跑 ./scripts/prod-e2e.sh 或 make cp-run,再执行本脚本。" >&2
+  exit 2
+fi
+# 清空相关表,确保断言基于本次运行而非上一次的残留。
+q "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
+    investigation_events, human_feedback, outbox, audit_log CASCADE;" >/dev/null
+
 echo "=== 1) checkout 首次告警 ==="
 sig checkout; sleep 3
 ck "incident 数 = 1" 1 "$(q 'select count(*) from incidents;')"

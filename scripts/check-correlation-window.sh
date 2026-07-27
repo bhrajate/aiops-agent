@@ -15,6 +15,15 @@ sig(){ # deployment
 pass=0; fail=0
 ck(){ if [ "$2" = "$3" ]; then echo "  ✓ $1 ($3)"; pass=$((pass+1)); else echo "  ✗ $1 期望 $2 实得 $3"; fail=$((fail+1)); fi; }
 
+# 前置检查 + 清库:本脚本不自己起后端;且断言用的是**绝对计数**,
+# 若不清空,上一个脚本的残留会让计数整体偏移(表现为"逻辑回归"的假象)。
+if ! curl -sf "$BASE/healthz" >/dev/null 2>&1; then
+  echo "后端未在 $BASE 运行。用 ./scripts/with-backend.sh $0 运行本脚本。" >&2
+  exit 2
+fi
+q "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
+    investigation_events, human_feedback, outbox, audit_log CASCADE;" >/dev/null
+
 echo "=== 窗口内:checkout + cart 应合并为 1 个 incident ==="
 sig checkout; sleep 2; sig cart; sleep 3
 ck "incident 数 = 1(合并)" 1 "$(q 'select count(*) from incidents;')"

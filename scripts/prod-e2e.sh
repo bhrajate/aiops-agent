@@ -29,6 +29,12 @@ docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aio
 docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T redpanda rpk topic delete signals incidents investigations --brokers redpanda:29092 >/dev/null 2>&1
 docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T redpanda rpk topic create signals incidents investigations --brokers redpanda:29092 -p 1 -r 1 >/dev/null 2>&1
 
+# 必须先构建:此前脚本直接跑 bin/ 下的**预编译**产物,一旦忘记手动重编,
+# E2E 就会在旧代码上跑出绿色——验证了一个不存在的版本。
+echo "=== 构建(确保验证的是当前源码)==="
+( cd "$ROOT/control-plane" && go build -o bin/control-plane ./cmd/control-plane ) || exit 1
+( cd "$ROOT/cluster-agent" && go build -o bin/cluster-agent ./cmd/cluster-agent ) || exit 1
+
 echo "=== 启动后端(内部 token + 认证 + webhook 全开)==="
 "$ROOT/cluster-agent/bin/cluster-agent" > "$LOGDIR/cluster-agent.log" 2>&1 & PIDS+=($!)
 wait_http http://localhost:9100/healthz 15 && echo "agent ok" || { echo agent FAIL; exit 1; }

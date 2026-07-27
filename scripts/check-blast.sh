@@ -11,6 +11,15 @@ sig(){ # alertname deployment
   curl -s -o /dev/null $BASE/v1/signals -H 'Content-Type: application/json' -H "X-AIOPS-Signature: $SIG" -d "$BODY"
 }
 
+if ! curl -sf "$BASE/healthz" >/dev/null 2>&1; then
+  echo "后端未在 $BASE 运行。用 ./scripts/with-backend.sh $0 运行本脚本。" >&2
+  exit 2
+fi
+# 断言用绝对计数,必须先清库,否则上一个脚本的残留会让判定失真。
+docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -c \
+  "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
+   investigation_events, human_feedback, outbox, audit_log CASCADE;" >/dev/null 2>&1
+
 echo "=== 服务1 checkout 故障 ==="; sig "HighLatency" "checkout"; sleep 3
 echo "checkout incident blast:"
 docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -t -c \
@@ -22,6 +31,26 @@ docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aio
   "select affected_resources->0->>'name', blast_radius from incidents where affected_resources->0->>'name' in ('checkout','cart') order by 1;" 2>/dev/null | sed '/^$/d'
 
 echo "=== 判定 ==="
+# 注意:两层聚合模型(优化②)下 cart 会**合并进** checkout 所在的 incident,
+# 不再各自成 incident——所以不能按 affected_resources[0]='cart' 去找。
+# 该 namespace 下唯一的活跃 incident 就是判定对象。
 SVC=$(docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -t -c \
-  "select (blast_radius->>'services')::int from incidents where affected_resources->0->>'name'='cart';" 2>/dev/null | tr -d ' \n')
-if [ "${SVC:-0}" -ge 2 ]; then echo "PASS: cart incident blast.services=$SVC (影响面扩大被捕获)"; else echo "FAIL: services=$SVC"; fi
+  "select (blast_radius->>'services')::int from incidents
+    where status in ('open','acknowledged') and correlation_key like '%|payment';" 2>/dev/null | tr -d ' \n')
+if [ "${SVC:-0}" -ge 2 ]; then
+  echo "PASS: incident blast.services=$SVC (影响面扩大被捕获)"
+else
+  echo "FAIL: services=${SVC:-空}"
+  exit 1
+fi
+
+# F3:services 与 resources / groups 语义不同,不能同值糊过去。
+# 这里两个服务各一个 Deployment 资源,故三者都应为 2;
+# 真正要防的是"同一服务多个 Pod 被算成多服务",由 model.ServiceKey 单测覆盖。
+BR=$(docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -t -c \
+  "select blast_radius from incidents
+    where status in ('open','acknowledged') and correlation_key like '%|payment';" 2>/dev/null | tr -d ' \n')
+for k in services resources groups namespaces; do
+  echo "$BR" | grep -q "\"$k\"" || { echo "FAIL: blast_radius 缺少维度 $k($BR)"; exit 1; }
+done
+echo "PASS: blast_radius 四个维度齐备 $BR"
