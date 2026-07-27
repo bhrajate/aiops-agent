@@ -42,43 +42,32 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 		return m.handleResolved(ctx, sig, groupingKey)
 	}
 
-	inc := model.Incident{
-		IncidentID:        newIncidentID(),
-		TenantID:          orDefault(sig.TenantID),
-		ClusterID:         sig.ClusterID,
-		GroupingKey:       groupingKey,
-		Severity:          NormalizeSeverity(sig.Severity),
-		Title:             buildTitle(sig),
-		FaultCategory:     ClassifyFault(sig),
-		AffectedResources: []model.ResourceRef{sig.ResourceRef},
-		BlastRadius:       map[string]any{"namespaces": 1, "resources": 1},
-		TopologyRefs:      []any{},
-		ChangeRefs:        []any{},
-		LastSeen:          nowOr(sig.StartsAt),
-	}
-
-	agg, created, err := m.store.UpsertIncidentWithOutbox(ctx, inc)
+	// 两层聚合(优化②):先入去重单元 alert_group(按 grouping_key,含 resource),
+	// 再按 correlation_key(tenant/cluster/namespace)find-or-create 相关性单元 incident,
+	// 最后由该 incident 下所有活跃 group 重算 affected_resources / blast_radius /
+	// severity / signal_count —— 影响面扩大天然可见,无需事后修补。
+	tenant := orDefault(sig.TenantID)
+	ts := nowOr(sig.StartsAt)
+	agg, created, err := m.store.UpsertAlertGroupAndCorrelate(ctx, store.AlertGroupInput{
+		GroupID:       "grp-" + randHex(10),
+		TenantID:      tenant,
+		ClusterID:     sig.ClusterID,
+		GroupingKey:   groupingKey,
+		Namespace:     sig.ResourceRef.Namespace,
+		ResourceRef:   sig.ResourceRef,
+		Severity:      NormalizeSeverity(sig.Severity),
+		FaultCategory: ClassifyFault(sig),
+		Title:         buildTitle(sig),
+	}, ts, ts)
 	if err != nil {
-		return fmt.Errorf("upsert incident: %w", err)
+		return fmt.Errorf("upsert alert group / correlate incident: %w", err)
 	}
 	if err := m.store.AttachSignalToIncident(ctx, sig.SignalID, agg.IncidentID); err != nil {
 		m.log.Warn("attach signal failed", "err", err)
 	}
-
-	// 相关性影响面(文档 6.2):在 grouping_key 单资源去重之上,按 tenant/cluster/namespace +
-	// 时间窗聚合活跃 incident,算出真实 services/namespaces,写回 incident 行。
-	// 这让"影响面扩大"能被 worker 的深度 RCA 闸门(policy.py: blast.services>1)捕获。
-	ns := ""
-	if len(agg.AffectedResources) > 0 {
-		ns = agg.AffectedResources[0].Namespace
-	}
-	if br, berr := m.store.ComputeCorrelatedBlastRadius(ctx, agg.TenantID, agg.ClusterID, ns, m.correlationWindowSec); berr != nil {
-		m.log.Warn("compute blast radius failed", "err", berr)
-	} else if err := m.store.SetIncidentBlastRadius(ctx, agg.IncidentID, br); err != nil {
-		m.log.Warn("set blast radius failed", "err", err)
-	} else if br.Services > 1 || br.Namespaces > 1 {
+	if svc, _ := agg.BlastRadius["services"].(float64); svc > 1 {
 		m.log.Info("blast radius expanded", "incident_id", agg.IncidentID,
-			"services", br.Services, "namespaces", br.Namespaces)
+			"services", agg.BlastRadius["services"], "namespaces", agg.BlastRadius["namespaces"])
 	}
 	m.store.Audit(ctx, agg.TenantID, "system", "incident_upsert", "incident", agg.IncidentID, "ok",
 		map[string]any{"cluster": agg.ClusterID}, map[string]any{"created": created, "version": agg.Version})
@@ -90,29 +79,20 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 	return nil
 }
 
+// handleResolved 解决的是**去重单元**(alert_group),而非整个 incident:
+// 只有当 incident 下再无活跃 group 时,incident 才随之 resolved。
+// 这修正了旧行为——一条 resolved 信号会误关闭包含多个资源故障的整个 incident。
 func (m *Manager) handleResolved(ctx context.Context, sig model.Signal, groupingKey string) error {
-	// 按 grouping_key + tenant 找到 incident 并标记 resolved(tenant 显式过滤,
-	// 不再仅依赖 tenant 已编进 grouping_key 哈希的隐式隔离)。
-	inc, err := m.findByGroupingKey(ctx, groupingKey, orDefault(sig.TenantID))
+	incidentID, incidentResolved, err := m.store.ResolveAlertGroup(ctx, groupingKey, orDefault(sig.TenantID))
 	if err != nil {
-		return nil // 找不到对应 incident,忽略
+		return nil // 无此 group,忽略
 	}
-	if err := m.store.SetIncidentStatus(ctx, inc.IncidentID, "resolved"); err != nil {
-		return err
+	if incidentResolved {
+		m.log.Info("incident resolved (all alert groups resolved)", "incident_id", incidentID)
+	} else if incidentID != "" {
+		m.log.Info("alert group resolved (incident still active)", "incident_id", incidentID)
 	}
-	m.log.Info("incident resolved by signal", "incident_id", inc.IncidentID)
 	return nil
-}
-
-func (m *Manager) findByGroupingKey(ctx context.Context, key, tenant string) (model.Incident, error) {
-	row := m.store.Pool().QueryRow(ctx,
-		`SELECT incident_id, tenant_id, cluster_id, version, grouping_key, status, severity,
-		   title, COALESCE(fault_category,''), signal_count
-		 FROM incidents WHERE grouping_key=$1 AND tenant_id=$2`, key, tenant)
-	var inc model.Incident
-	err := row.Scan(&inc.IncidentID, &inc.TenantID, &inc.ClusterID, &inc.Version, &inc.GroupingKey,
-		&inc.Status, &inc.Severity, &inc.Title, &inc.FaultCategory, &inc.SignalCount)
-	return inc, err
 }
 
 // ---- 归一化 / 分类 逻辑(确定性)----
@@ -140,7 +120,9 @@ func GroupingKey(s model.Signal) string {
 // change / event / alert 归到同一资源的同一组,便于变更与告警关联。
 func normalizeSignalTypeForGrouping(t string) string {
 	switch t {
-	case "change", "event", "alert":
+	// resolved 必须与其 firing 对应物落到同一 grouping_key,否则恢复信号找不到
+	// 要关闭的 alert_group(两层模型下表现为 group 永不 resolved)。
+	case "change", "event", "alert", "resolved":
 		return "incident"
 	default:
 		return t
@@ -224,8 +206,4 @@ func nowOr(t *time.Time) time.Time {
 		return *t
 	}
 	return time.Now().UTC()
-}
-
-func newIncidentID() string {
-	return "inc-" + randHex(10)
 }

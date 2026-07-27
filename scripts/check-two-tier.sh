@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# 验证两层聚合模型(优化②):
+#   1. 同资源重复告警 → 同一 alert_group(去重),incident 不新增
+#   2. 同 namespace 不同资源 → 合并进同一 incident,services 增长(聚合)
+#   3. 单个资源 resolved → 只关掉该 group,incident 仍活跃
+#   4. 全部 resolved → incident 才 resolved
+set -u
+ROOT="/home/glory/code/ai-generate/aiops"
+BASE=http://localhost:8088
+COMPOSE="$ROOT/deploy/docker-compose.yml"
+
+sig(){ # deployment status rule
+  local st="${2:-firing}"
+  local BODY="{\"alerts\":[{\"status\":\"$st\",\"labels\":{\"alertname\":\"HighLatency\",\"severity\":\"warning\",\"namespace\":\"payment\",\"deployment\":\"$1\",\"cluster\":\"prod-cn-1\",\"rule_id\":\"r-$1\"},\"startsAt\":\"2026-07-27T02:00:00Z\",\"endsAt\":\"2026-07-27T03:00:00Z\"}]}"
+  local SIG=$(python3 -c "import hmac,hashlib;print('sha256='+hmac.new(b'webhook-dev-secret','''$BODY'''.encode(),hashlib.sha256).hexdigest())")
+  curl -s -o /dev/null $BASE/v1/signals -H 'Content-Type: application/json' -H "X-AIOPS-Signature: $SIG" -d "$BODY"
+}
+q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -t -c "$1" 2>/dev/null | tr -d ' ' | sed '/^$/d'; }
+
+pass=0; fail=0
+ck(){ if [ "$2" = "$3" ]; then echo "  ✓ $1 ($3)"; pass=$((pass+1)); else echo "  ✗ $1 期望 $2 实得 $3"; fail=$((fail+1)); fi; }
+
+echo "=== 1) checkout 首次告警 ==="
+sig checkout; sleep 3
+ck "incident 数 = 1" 1 "$(q 'select count(*) from incidents;')"
+ck "alert_group 数 = 1" 1 "$(q 'select count(*) from alert_groups;')"
+ck "blast.services = 1" 1 "$(q "select (blast_radius->>'services') from incidents;")"
+
+echo "=== 2) checkout 重复告警(去重:group 不增、incident 不增)==="
+sig checkout; sleep 3
+ck "incident 仍 1" 1 "$(q 'select count(*) from incidents;')"
+ck "alert_group 仍 1" 1 "$(q 'select count(*) from alert_groups;')"
+ck "group signal_count = 2" 2 "$(q "select signal_count from alert_groups where resource_ref->>'name'='checkout';")"
+
+echo "=== 3) cart 告警(聚合:同 namespace 合并进同一 incident)==="
+sig cart; sleep 3
+ck "incident 仍 1(合并而非新建)" 1 "$(q 'select count(*) from incidents;')"
+ck "alert_group 增到 2" 2 "$(q 'select count(*) from alert_groups;')"
+ck "blast.services = 2(影响面扩大可见)" 2 "$(q "select (blast_radius->>'services') from incidents;")"
+ck "affected_resources 含 2 个资源" 2 "$(q "select jsonb_array_length(affected_resources) from incidents;")"
+
+echo "=== 4) cart 恢复(只关该 group,incident 仍活跃)==="
+sig cart resolved; sleep 3
+ck "incident 仍 open" open "$(q 'select status from incidents;')"
+ck "cart group resolved" resolved "$(q "select status from alert_groups where resource_ref->>'name'='cart';")"
+ck "blast.services 回落到 1" 1 "$(q "select (blast_radius->>'services') from incidents;")"
+
+echo "=== 5) checkout 也恢复(incident 随之 resolved)==="
+sig checkout resolved; sleep 3
+ck "incident resolved" resolved "$(q 'select status from incidents;')"
+
+echo ""; echo "RESULT: pass=$pass fail=$fail"; [ "$fail" = 0 ] && echo "TWO-TIER OK" || echo "FAILURES"

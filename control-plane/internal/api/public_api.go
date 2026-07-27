@@ -173,7 +173,11 @@ func (a *PublicAPI) getIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	invs, _ := a.store.ListInvestigationsByIncident(r.Context(), inc.IncidentID)
-	httpx.JSON(w, http.StatusOK, map[string]any{"incident": inc, "investigations": invs})
+	// 两层模型:alert_groups 是该 incident 下的去重单元明细(哪些资源/规则在告警)
+	groups, _ := a.store.ListAlertGroups(r.Context(), inc.IncidentID)
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"incident": inc, "investigations": invs, "alert_groups": groups,
+	})
 }
 
 func (a *PublicAPI) startInvestigation(w http.ResponseWriter, r *http.Request) {

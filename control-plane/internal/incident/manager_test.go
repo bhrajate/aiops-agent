@@ -31,6 +31,21 @@ func TestGroupingKeyStableAndDedupes(t *testing.T) {
 		t.Fatal("同资源的 change 与 alert 应归为同一 incident 组")
 	}
 
+	// resolved 必须与其 firing(alert)对应物同组,否则恢复信号找不到要关闭的 alert_group
+	resolved := model.Signal{
+		TenantID: "default", ClusterID: "prod-cn-1", SignalType: "resolved",
+		ResourceRef: model.ResourceRef{Namespace: "payment", Kind: "Deployment", Name: "checkout"},
+		Labels:      map[string]string{"rule_id": "r-1"},
+	}
+	firing := model.Signal{
+		TenantID: "default", ClusterID: "prod-cn-1", SignalType: "alert",
+		ResourceRef: model.ResourceRef{Namespace: "payment", Kind: "Deployment", Name: "checkout"},
+		Labels:      map[string]string{"rule_id": "r-1"},
+	}
+	if GroupingKey(resolved) != GroupingKey(firing) {
+		t.Fatal("resolved 应与同资源同规则的 firing 落到同一 grouping_key")
+	}
+
 	// 不同资源必须不同组
 	other := s1
 	other.ResourceRef.Name = "orders"
