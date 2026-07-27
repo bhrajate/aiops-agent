@@ -104,6 +104,10 @@ AIOPS_S3_SECRET_KEY=minioadmin
 #   api / internal / ingest / trigger / outbox,或 all(默认全开=单体)
 #   例:API 副本 AIOPS_ROLES=api,internal;后台副本 AIOPS_ROLES=ingest,trigger,outbox
 AIOPS_ROLES=all
+# 观测后端集群维度 label 名(多集群共用一套 Prometheus/Loki/Tempo 时**必须**设置,
+# 否则只按 namespace 过滤会读到其他集群同名 namespace)。常见:cluster / cluster_id /
+# k8s_cluster;Tempo 侧资源属性常为 k8s.cluster.name。为空=后端本集群专用,不强制。
+AIOPS_CLUSTER_LABEL=cluster
 AIOPS_CLUSTER_AGENT_URL=http://localhost:9100   # 单集群兼容(未配置下面的映射时生效)
 # 多集群:Tool Gateway 按 incident.cluster_id 路由到对应集群的 Agent。
 # 未在映射中的集群一律拒绝工具调用(no_agent_for_cluster),不回退到其他 Agent。

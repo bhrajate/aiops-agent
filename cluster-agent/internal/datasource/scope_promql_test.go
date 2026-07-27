@@ -12,12 +12,12 @@ func TestScopePromQL_InjectsAndBlocksBypass(t *testing.T) {
 		`sum by (pod) (rate(http_requests_total[5m]))`,
 	}
 	for _, expr := range ok {
-		out, err := scopePromQL(expr, ns)
+		out, err := scopePromQL(expr, ScopeLabel{Name: "namespace", Value: ns})
 		if err != nil {
 			t.Fatalf("scopePromQL(%q) 意外报错: %v", expr, err)
 		}
 		// 结果中不应残留任何未限定的裸选择器:再跑一遍应稳定(幂等)且仍合法
-		out2, err := scopePromQL(out, ns)
+		out2, err := scopePromQL(out, ScopeLabel{Name: "namespace", Value: ns})
 		if err != nil {
 			t.Fatalf("二次 scope(%q) 报错: %v", out, err)
 		}
@@ -35,14 +35,14 @@ func TestScopePromQL_RejectsCrossNamespace(t *testing.T) {
 		`up{namespace!="payment"}`,
 	}
 	for _, expr := range bad {
-		if _, err := scopePromQL(expr, "payment"); err == nil {
+		if _, err := scopePromQL(expr, ScopeLabel{Name: "namespace", Value: "payment"}); err == nil {
 			t.Errorf("scopePromQL(%q) 应拒绝跨 namespace,但通过了", expr)
 		}
 	}
 }
 
 func TestScopePromQL_InvalidExpr(t *testing.T) {
-	if _, err := scopePromQL(`sum(((`, "payment"); err == nil {
+	if _, err := scopePromQL(`sum(((`, ScopeLabel{Name: "namespace", Value: "payment"}); err == nil {
 		t.Error("非法 PromQL 应报错")
 	}
 }

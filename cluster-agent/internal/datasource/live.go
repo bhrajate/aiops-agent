@@ -32,11 +32,20 @@ import (
 // Live is the real, read-only DataSource. Any sub-backend may be nil when its
 // URL / client is not configured; the owning tool then degrades gracefully.
 type Live struct {
-	prom  *promClient
-	loki  *lokiClient
-	tempo *tempoClient
-	kube  *kubeReader
-	now   func() time.Time
+	prom         *promClient
+	loki         *lokiClient
+	tempo        *tempoClient
+	kube         *kubeReader
+	clusterLabel string // 观测后端区分集群的 label 名;空=后端为本集群专用
+	now          func() time.Time
+}
+
+// clusterScope 返回集群维度约束(clusterLabel 未配置时返回零值,表示不强制)。
+func (l *Live) clusterScope(scope Scope) ScopeLabel {
+	if l.clusterLabel == "" {
+		return ScopeLabel{}
+	}
+	return ScopeLabel{Name: l.clusterLabel, Value: scope.ClusterID}
 }
 
 var _ DataSource = (*Live)(nil)
@@ -52,6 +61,11 @@ type LiveConfig struct {
 	Kubeconfig string
 	// HTTPTimeout bounds every upstream HTTP call. Zero -> 15s.
 	HTTPTimeout time.Duration
+	// ClusterLabel 是观测后端中区分集群的 label / tag 名(如 cluster、cluster_id、
+	// k8s_cluster;Tempo 侧常为 k8s.cluster.name)。**多集群共用一套
+	// Prometheus/Loki/Tempo 时必须设置**,否则只按 namespace 过滤会读到其他
+	// 集群的同名 namespace。为空表示后端为本集群专用,不做集群维度约束。
+	ClusterLabel string
 }
 
 // NewLive builds a Live data source from cfg. It never fails hard: a missing
@@ -64,7 +78,7 @@ func NewLive(cfg LiveConfig) *Live {
 	}
 	hc := &http.Client{Timeout: timeout}
 
-	l := &Live{now: time.Now}
+	l := &Live{now: time.Now, clusterLabel: strings.TrimSpace(cfg.ClusterLabel)}
 	if u := strings.TrimSpace(cfg.PrometheusURL); u != "" {
 		l.prom = &promClient{base: strings.TrimRight(u, "/"), hc: hc}
 	}
@@ -87,6 +101,7 @@ func LiveConfigFromEnv() LiveConfig {
 		LokiURL:       os.Getenv("AIOPS_LOKI_URL"),
 		TempoURL:      os.Getenv("AIOPS_TEMPO_URL"),
 		Kubeconfig:    os.Getenv("AIOPS_KUBECONFIG"),
+		ClusterLabel:  os.Getenv("AIOPS_CLUSTER_LABEL"),
 	}
 }
 
@@ -214,7 +229,7 @@ func (l *Live) QueryMetrics(ctx context.Context, scope Scope, args map[string]an
 		return unavailable("prometheus", ns(scope), liveResource(scope), "未配置 AIOPS_PROM_URL,指标查询降级"), nil
 	}
 	from, to := l.window(scope)
-	return l.prom.queryRange(ctx, scope, args, from, to)
+	return l.prom.queryRange(ctx, scope, args, from, to, l.clusterScope(scope))
 }
 
 func (l *Live) SearchLogs(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
@@ -222,7 +237,7 @@ func (l *Live) SearchLogs(ctx context.Context, scope Scope, args map[string]any)
 		return unavailable("loki", ns(scope), liveResource(scope), "未配置 AIOPS_LOKI_URL,日志查询降级"), nil
 	}
 	from, to := l.window(scope)
-	return l.loki.queryRange(ctx, scope, args, from, to)
+	return l.loki.queryRange(ctx, scope, args, from, to, l.clusterScope(scope))
 }
 
 func (l *Live) GetTraces(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
@@ -230,5 +245,5 @@ func (l *Live) GetTraces(ctx context.Context, scope Scope, args map[string]any) 
 		return unavailable("tempo", ns(scope), liveResource(scope), "未配置 AIOPS_TEMPO_URL,链路查询降级"), nil
 	}
 	from, to := l.window(scope)
-	return l.tempo.search(ctx, scope, args, from, to)
+	return l.tempo.search(ctx, scope, args, from, to, l.clusterScope(scope))
 }

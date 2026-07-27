@@ -53,7 +53,7 @@ func defaultLiveMetricExpr(namespace, resource string) string {
 		namespace, resource, namespace, resource)
 }
 
-func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time) (Result, error) {
+func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time, clusterScope ScopeLabel) (Result, error) {
 	namespace := ns(scope)
 	resource := liveResource(scope)
 	// Reject names that could break out of the injected label matchers.
@@ -64,20 +64,28 @@ func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[strin
 		return Result{}, err
 	}
 
+	// 强制约束:namespace + (可选)cluster。共享后端下必须带 cluster,
+	// 否则会读到其他集群的同名 namespace。
+	required := []ScopeLabel{{Name: "namespace", Value: namespace}}
+	if clusterScope.Name != "" {
+		if err := validateDNS1123("cluster", clusterScope.Value); err != nil {
+			return Result{}, err
+		}
+		required = append(required, clusterScope)
+	}
+
 	expr, _ := args["expr"].(string)
 	if strings.TrimSpace(expr) == "" {
-		// Default query is already namespace-scoped by construction.
+		// 默认查询按 namespace 构造,再统一过一遍注入以补上 cluster 约束。
 		expr = defaultLiveMetricExpr(namespace, resource)
-	} else {
-		// Caller-supplied expr: force the namespace matcher into every selector
-		// (AST-level, so bare selectors like `... or up` cannot escape the scope)
-		// and reject any cross-namespace reference.
-		scoped, err := scopePromQL(expr, namespace)
-		if err != nil {
-			return Result{}, fmt.Errorf("query_metrics scope: %w", err)
-		}
-		expr = scoped
 	}
+	// Caller-supplied 或默认 expr 一律过 AST 注入:每个 selector 都被限定,
+	// 裸选择器(`... or up`)无法逃逸;已带但跨范围的 matcher 直接拒绝。
+	scoped, err := scopePromQL(expr, required...)
+	if err != nil {
+		return Result{}, fmt.Errorf("query_metrics scope: %w", err)
+	}
+	expr = scoped
 	step := promStep(from, to)
 
 	q := url.Values{}

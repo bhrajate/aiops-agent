@@ -25,7 +25,7 @@ func TestTempoSearch_ScopeIsolation(t *testing.T) {
 	now := time.Now()
 
 	// 正常:注入 namespace tag
-	if _, err := c.search(context.Background(), scope, map[string]any{"service": "checkout"}, now.Add(-time.Hour), now); err != nil {
+	if _, err := c.search(context.Background(), scope, map[string]any{"service": "checkout"}, now.Add(-time.Hour), now, ScopeLabel{}); err != nil {
 		t.Fatalf("search 报错: %v", err)
 	}
 	if !strings.Contains(gotTags, "k8s.namespace.name=payment") {
@@ -35,7 +35,7 @@ func TestTempoSearch_ScopeIsolation(t *testing.T) {
 	// 越权/注入:非法 service 必须被拒(不能靠覆盖 service 读跨 namespace)
 	bad := []any{"other ns", "svc\"inject", "a=b", "../x"}
 	for _, s := range bad {
-		if _, err := c.search(context.Background(), scope, map[string]any{"service": s}, now.Add(-time.Hour), now); err == nil {
+		if _, err := c.search(context.Background(), scope, map[string]any{"service": s}, now.Add(-time.Hour), now, ScopeLabel{}); err == nil {
 			t.Errorf("非法 service %v 应被拒绝", s)
 		}
 	}
@@ -74,7 +74,7 @@ func TestTempoSearch_SpanDetail(t *testing.T) {
 	c := &tempoClient{base: srv.URL, hc: srv.Client()}
 	scope := Scope{ClusterID: "prod-cn-1", Namespace: "payment"}
 	now := time.Now()
-	res, err := c.search(context.Background(), scope, map[string]any{"service": "checkout"}, now.Add(-time.Hour), now)
+	res, err := c.search(context.Background(), scope, map[string]any{"service": "checkout"}, now.Add(-time.Hour), now, ScopeLabel{})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

@@ -37,11 +37,21 @@ func validateDNS1123(kind, name string) error {
 	return nil
 }
 
-// scopePromQL enforces single-namespace isolation on a PromQL expression at the
-// AST level (robust against bare-selector bypass such as `up{namespace="x"} or up`).
-// Every VectorSelector gets namespace="<ns>" injected; a selector already pinning
-// a *different* namespace (or a non-exact namespace matcher) is rejected.
-func scopePromQL(expr, ns string) (string, error) {
+// ScopeLabel 一个必须被强制的 label 约束(如 namespace="payment"、cluster="prod-cn-1")。
+type ScopeLabel struct {
+	Name  string
+	Value string
+}
+
+// scopePromQL enforces label isolation on a PromQL expression at the AST level
+// (robust against bare-selector bypass such as `up{namespace="x"} or up`).
+//
+// 对 required 中每个 label:每个 VectorSelector 若未携带则注入 `name="value"`;
+// 若已携带但值不同或非精确匹配(!=/=~/!~),则拒绝整条查询。
+//
+// **共享观测后端必须同时约束 cluster 与 namespace**:多集群共用一套
+// Prometheus/Loki/Tempo 时,只按 namespace 过滤会读到其他集群的同名 namespace。
+func scopePromQL(expr string, required ...ScopeLabel) (string, error) {
 	e, err := parser.NewParser(parser.Options{}).ParseExpr(expr)
 	if err != nil {
 		return "", fmt.Errorf("查询表达式非法 PromQL: %w", err)
@@ -52,17 +62,26 @@ func scopePromQL(expr, ns string) (string, error) {
 		if !ok {
 			return nil
 		}
-		for _, m := range vs.LabelMatchers {
-			if m.Name != "namespace" {
-				continue
+		for _, req := range required {
+			if req.Name == "" || req.Value == "" {
+				continue // 未配置该维度(如集群 label 名为空)则不强制
 			}
-			if m.Type != labels.MatchEqual || m.Value != ns {
-				vErr = fmt.Errorf("查询跨 namespace(仅允许 namespace=%q)", ns)
+			found := false
+			for _, m := range vs.LabelMatchers {
+				if m.Name != req.Name {
+					continue
+				}
+				found = true
+				if m.Type != labels.MatchEqual || m.Value != req.Value {
+					vErr = fmt.Errorf("查询越出授权范围(仅允许 %s=%q)", req.Name, req.Value)
+				}
+				break
 			}
-			return nil // already scoped to ns
+			if !found {
+				vs.LabelMatchers = append(vs.LabelMatchers,
+					&labels.Matcher{Type: labels.MatchEqual, Name: req.Name, Value: req.Value})
+			}
 		}
-		vs.LabelMatchers = append(vs.LabelMatchers,
-			&labels.Matcher{Type: labels.MatchEqual, Name: "namespace", Value: ns})
 		return nil
 	})
 	if vErr != nil {
@@ -82,7 +101,7 @@ func scopePromQL(expr, ns string) (string, error) {
 //     scoped, so we refuse rather than let it query cluster-wide.
 //
 // The scan is quote-aware so label values containing { } or , are handled.
-func injectNamespaceMatchers(expr, ns string) (string, error) {
+func injectNamespaceMatchers(expr string, required ...ScopeLabel) (string, error) {
 	var out strings.Builder
 	blocks := 0
 	i := 0
@@ -114,7 +133,7 @@ func injectNamespaceMatchers(expr, ns string) (string, error) {
 			return "", fmt.Errorf("查询表达式括号不匹配")
 		}
 		inner := expr[i+1 : j]
-		rewritten, err := scopeSelectorInner(inner, ns)
+		rewritten, err := scopeSelectorInner(inner, required...)
 		if err != nil {
 			return "", err
 		}
@@ -130,29 +149,39 @@ func injectNamespaceMatchers(expr, ns string) (string, error) {
 	return out.String(), nil
 }
 
-// scopeSelectorInner processes the contents of a single { ... } block.
-func scopeSelectorInner(inner, ns string) (string, error) {
+// scopeSelectorInner processes the contents of a single { ... } block,
+// enforcing every required label(如 namespace + cluster)。
+func scopeSelectorInner(inner string, required ...ScopeLabel) (string, error) {
 	matchers := splitMatchers(inner)
-	hasNS := false
-	for _, m := range matchers {
-		name, op := matcherLabel(m)
-		if name != "namespace" {
-			continue
+	var toPrepend []string
+	for _, req := range required {
+		if req.Name == "" || req.Value == "" {
+			continue // 未配置该维度则不强制
 		}
-		val := matcherValue(m)
-		if op != "=" || val != ns {
-			return "", fmt.Errorf("查询跨 namespace(仅允许 namespace=%q)", ns)
+		found := false
+		for _, m := range matchers {
+			name, op := matcherLabel(m)
+			if name != req.Name {
+				continue
+			}
+			found = true
+			if op != "=" || matcherValue(m) != req.Value {
+				return "", fmt.Errorf("查询越出授权范围(仅允许 %s=%q)", req.Name, req.Value)
+			}
+			break
 		}
-		hasNS = true
+		if !found {
+			toPrepend = append(toPrepend, fmt.Sprintf("%s=%q", req.Name, req.Value))
+		}
 	}
-	if hasNS {
+	if len(toPrepend) == 0 {
 		return inner, nil
 	}
-	nsMatch := fmt.Sprintf("namespace=%q", ns)
+	prefix := strings.Join(toPrepend, ",")
 	if strings.TrimSpace(inner) == "" {
-		return nsMatch, nil
+		return prefix, nil
 	}
-	return nsMatch + "," + inner, nil
+	return prefix + "," + inner, nil
 }
 
 // splitMatchers splits a selector body on top-level commas (ignoring commas

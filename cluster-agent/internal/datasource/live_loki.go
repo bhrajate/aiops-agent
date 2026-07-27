@@ -41,7 +41,7 @@ func defaultLogQL(scope Scope) string {
 	return fmt.Sprintf(`{namespace=%q,app=%q}`, ns(scope), res)
 }
 
-func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time) (Result, error) {
+func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time, clusterScope ScopeLabel) (Result, error) {
 	// Reject names that could break out of the injected label matchers.
 	if err := validateDNS1123("namespace", ns(scope)); err != nil {
 		return Result{}, err
@@ -50,19 +50,25 @@ func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[strin
 		return Result{}, err
 	}
 
+	// 强制约束:namespace + (可选)cluster(共享后端必需)。
+	required := []ScopeLabel{{Name: "namespace", Value: ns(scope)}}
+	if clusterScope.Name != "" {
+		if err := validateDNS1123("cluster", clusterScope.Value); err != nil {
+			return Result{}, err
+		}
+		required = append(required, clusterScope)
+	}
+
 	query, _ := args["query"].(string)
 	if strings.TrimSpace(query) == "" {
-		// Default selector is already namespace-scoped by construction.
 		query = defaultLogQL(scope)
-	} else {
-		// Caller-supplied LogQL: force the namespace label into every stream
-		// selector and reject any cross-namespace reference.
-		scoped, err := injectNamespaceMatchers(query, ns(scope))
-		if err != nil {
-			return Result{}, fmt.Errorf("search_logs scope: %w", err)
-		}
-		query = scoped
 	}
+	// 默认与调用方 LogQL 一律过注入:每个流选择器都被限定,跨范围 matcher 拒绝。
+	scoped, err := injectNamespaceMatchers(query, required...)
+	if err != nil {
+		return Result{}, fmt.Errorf("search_logs scope: %w", err)
+	}
+	query = scoped
 
 	q := url.Values{}
 	q.Set("query", query)

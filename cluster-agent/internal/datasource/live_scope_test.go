@@ -43,7 +43,7 @@ func TestInjectNamespaceMatchers(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := injectNamespaceMatchers(c.expr, c.ns)
+			got, err := injectNamespaceMatchers(c.expr, ScopeLabel{Name: "namespace", Value: c.ns})
 			if c.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got %q", got)

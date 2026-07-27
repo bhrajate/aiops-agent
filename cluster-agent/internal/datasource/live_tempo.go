@@ -29,7 +29,7 @@ type tempoSearchResponse struct {
 	} `json:"traces"`
 }
 
-func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]any, from, to time.Time) (Result, error) {
+func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]any, from, to time.Time, clusterScope ScopeLabel) (Result, error) {
 	svc, _ := args["service"].(string)
 	if strings.TrimSpace(svc) == "" {
 		svc = liveResource(scope)
@@ -49,6 +49,13 @@ func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]a
 	// Force the namespace tag; add service.name when known. url.Values.Encode
 	// escapes the values, and DNS-1123 validation above blocks tag-syntax breakout.
 	tags := "k8s.namespace.name=" + namespace
+	// 共享后端必须带集群维度 tag,否则跨集群串 trace。
+	if clusterScope.Name != "" {
+		if err := validateDNS1123("cluster", clusterScope.Value); err != nil {
+			return Result{}, fmt.Errorf("get_traces scope: %w", err)
+		}
+		tags += " " + clusterScope.Name + "=" + clusterScope.Value
+	}
 	if svc != "" {
 		tags += " service.name=" + svc
 	}
