@@ -43,8 +43,9 @@ func CorrelationKey(tenant, cluster, namespace string) string {
 //  5. 写 incidents outbox。
 //
 // 返回聚合后的 Incident 与 incident 是否为新建。
+// windowSec 是相关性合并的时间窗(秒):只与该窗口内仍活跃的 incident 合并。
 func (s *Store) UpsertAlertGroupAndCorrelate(
-	ctx context.Context, g AlertGroupInput, lastSeen, firstSeen interface{},
+	ctx context.Context, g AlertGroupInput, lastSeen, firstSeen interface{}, windowSec int,
 ) (model.Incident, bool, error) {
 	var result model.Incident
 	var created bool
@@ -70,13 +71,41 @@ func (s *Store) UpsertAlertGroupAndCorrelate(
 			return fmt.Errorf("upsert alert_group: %w", err)
 		}
 
-		// 2) find-or-create 相关性单元(活跃 incident)
+		// 2) find-or-create 相关性单元(活跃 incident)。
+		//
+		// 时间窗约束:只与"仍在活跃时间窗内"的 incident 合并。若同 correlation_key
+		// 的 incident 已陈旧(windowSec 内无新信号),说明上一轮故障已停止,
+		// 不应把新故障并进去——否则一个 open 的 incident 会无限吸收后续无关故障,
+		// 滚成永不关闭的巨型 incident 并污染 blast_radius / 深度 RCA 闸门。
+		// 陈旧 incident 先自动 resolved(连同其 group),再新建。
 		ck := CorrelationKey(g.TenantID, g.ClusterID, g.Namespace)
 		var incidentID string
+		var stale bool
+		// 陈旧判定用 updated_at(**处理时间**:我们最后一次为该 incident 处理信号的时刻),
+		// 而不是 last_seen(**事件时间**:来自告警 payload 的 startsAt)。
+		// 告警可能携带很旧的 startsAt(补发、时钟漂移、回放),用事件时间判活会把
+		// 刚创建的 incident 误判为陈旧。last_seen 仍保留事件时间语义,供展示与 RCA 时间窗使用。
 		err = tx.QueryRow(ctx,
-			`SELECT incident_id FROM incidents
-			 WHERE correlation_key=$1 AND status IN ('open','acknowledged')
-			 FOR UPDATE`, ck).Scan(&incidentID)
+			`SELECT incident_id,
+			        (updated_at < now() - make_interval(secs => $2::double precision)) AS stale
+			   FROM incidents
+			  WHERE correlation_key=$1 AND status IN ('open','acknowledged')
+			  FOR UPDATE`, ck, windowSec).Scan(&incidentID, &stale)
+		if err == nil && stale {
+			// 自动关闭陈旧 incident 及其 group,腾出 correlation_key(部分唯一索引)
+			if _, e := tx.Exec(ctx,
+				`UPDATE alert_groups SET status='resolved', updated_at=now()
+				  WHERE incident_id=$1 AND status='open' AND group_id <> $2`,
+				incidentID, groupID); e != nil {
+				return fmt.Errorf("resolve stale groups: %w", e)
+			}
+			if _, e := tx.Exec(ctx,
+				`UPDATE incidents SET status='resolved', resolved_at=now(), updated_at=now()
+				  WHERE incident_id=$1`, incidentID); e != nil {
+				return fmt.Errorf("resolve stale incident: %w", e)
+			}
+			err = pgx.ErrNoRows // 走下面的新建分支
+		}
 		switch {
 		case err == pgx.ErrNoRows:
 			created = true

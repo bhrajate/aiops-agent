@@ -58,7 +58,7 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 		Severity:      NormalizeSeverity(sig.Severity),
 		FaultCategory: ClassifyFault(sig),
 		Title:         buildTitle(sig),
-	}, ts, ts)
+	}, ts, ts, m.correlationWindowSec)
 	if err != nil {
 		return fmt.Errorf("upsert alert group / correlate incident: %w", err)
 	}
