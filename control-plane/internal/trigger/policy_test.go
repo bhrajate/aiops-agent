@@ -22,13 +22,30 @@ func TestEvaluateAutoDeterministic(t *testing.T) {
 }
 
 func TestStopReason(t *testing.T) {
-	if r := StopReason(model.Incident{Status: "resolved"}, false); r == "" {
+	open := model.Incident{Status: "open"}
+	if r := StopReason(StopInput{Incident: model.Incident{Status: "resolved"}}); r == "" {
 		t.Error("已解决的 incident 应停止")
 	}
-	if r := StopReason(model.Incident{Status: "open"}, true); r != "existing_investigation_same_version" {
+	if r := StopReason(StopInput{Incident: open, HasActiveSameVersion: true}); r != "existing_investigation_same_version" {
 		t.Errorf("已有同版本活跃调查应停止, got %q", r)
 	}
-	if r := StopReason(model.Incident{Status: "open"}, false); r != "" {
-		t.Errorf("open 且无活跃调查不应停止, got %q", r)
+	if r := StopReason(StopInput{Incident: open}); r != "" {
+		t.Errorf("open 且无约束不应停止, got %q", r)
+	}
+	// 冷却期内应停止
+	if r := StopReason(StopInput{Incident: open, HasPrior: true, SecondsSincePrior: 60, CooldownSec: 300}); r != "cooldown_active" {
+		t.Errorf("冷却期内应停止, got %q", r)
+	}
+	// 超过冷却期不停止
+	if r := StopReason(StopInput{Incident: open, HasPrior: true, SecondsSincePrior: 400, CooldownSec: 300}); r != "" {
+		t.Errorf("超过冷却期不应停止, got %q", r)
+	}
+	// 并发达上限应停止
+	if r := StopReason(StopInput{Incident: open, ActiveCount: 20, MaxActive: 20}); r != "tenant_concurrency_limit" {
+		t.Errorf("并发上限应停止, got %q", r)
+	}
+	// 并发未达上限不停止
+	if r := StopReason(StopInput{Incident: open, ActiveCount: 5, MaxActive: 20}); r != "" {
+		t.Errorf("并发未达上限不应停止, got %q", r)
 	}
 }

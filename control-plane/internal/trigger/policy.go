@@ -30,16 +30,33 @@ func EvaluateAuto(inc model.Incident) Decision {
 	}
 }
 
+// StopInput 硬停止判断的输入(文档 6.3)。
+type StopInput struct {
+	Incident             model.Incident
+	HasActiveSameVersion bool
+	// 冷却:同 incident 上次调查距今秒数;HasPrior=false 表示无历史。
+	SecondsSincePrior float64
+	HasPrior          bool
+	CooldownSec       int // <=0 关闭冷却
+	// 并发:该租户当前活跃调查数与上限。
+	ActiveCount int
+	MaxActive   int // <=0 关闭并发上限
+}
+
 // StopReason 硬停止条件(文档 6.3),返回非空表示应停止。
-func StopReason(inc model.Incident, hasActiveSameVersion bool) string {
+// 已实现:已解决/关闭、同版本已有调查、冷却期内、租户并发上限。
+// 维护窗口/静默、租户模型预算仍留接口(接配置源)。
+func StopReason(in StopInput) string {
 	switch {
-	case inc.Status == "resolved" || inc.Status == "closed":
+	case in.Incident.Status == "resolved" || in.Incident.Status == "closed":
 		return "incident_resolved_or_closed"
-	case hasActiveSameVersion:
+	case in.HasActiveSameVersion:
 		return "existing_investigation_same_version"
+	case in.CooldownSec > 0 && in.HasPrior && in.SecondsSincePrior < float64(in.CooldownSec):
+		return "cooldown_active"
+	case in.MaxActive > 0 && in.ActiveCount >= in.MaxActive:
+		return "tenant_concurrency_limit"
 	default:
 		return ""
 	}
-	// 说明:维护窗口/静默、预算耗尽、冷却、并发上限等在生产中接入配置源;
-	// 首版实现最关键的两条,其余留接口(见 README 的 TODO)。
 }

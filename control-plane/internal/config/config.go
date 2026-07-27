@@ -62,6 +62,10 @@ type Config struct {
 	// 可靠性
 	MaxDeliveryAttempts int
 
+	// 触发策略硬停止(文档 6.3):冷却期与并发上限,防告警风暴/成本失控
+	CooldownSec        int // 同 grouping_key 两次调查最小间隔;<=0 关闭
+	MaxActivePerTenant int // 每租户同时活跃调查上限;<=0 关闭
+
 	// 可观测性(架构第 16 节)
 	ServiceName  string
 	OTLPEndpoint string // 为空则不导出 trace(仍可埋点)
@@ -137,6 +141,8 @@ func Load() Config {
 		S3UseSSL:    getbool("AIOPS_S3_USE_SSL", false),
 
 		MaxDeliveryAttempts: getint("AIOPS_MAX_DELIVERY_ATTEMPTS", 5),
+		CooldownSec:         getint("AIOPS_INVESTIGATION_COOLDOWN_SEC", 300),
+		MaxActivePerTenant:  getint("AIOPS_MAX_ACTIVE_INVESTIGATIONS", 20),
 
 		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),

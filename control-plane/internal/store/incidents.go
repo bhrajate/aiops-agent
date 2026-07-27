@@ -163,4 +163,31 @@ func (s *Store) HasActiveInvestigation(ctx context.Context, incidentID string, v
 	return n > 0, err
 }
 
+// SecondsSinceLastInvestigation 返回该 incident 上一次调查启动距今的秒数。
+// 无历史调查时返回 (0, false)。用于冷却期判断(文档 6.3)。
+func (s *Store) SecondsSinceLastInvestigation(ctx context.Context, incidentID string) (float64, bool, error) {
+	var secs float64
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXTRACT(EPOCH FROM (now() - max(started_at)))
+		 FROM investigations WHERE incident_id=$1`, incidentID).Scan(&secs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		// max() over 空集返回 NULL → Scan 到 float64 报错;视为无历史
+		return 0, false, nil
+	}
+	return secs, true, nil
+}
+
+// CountActiveInvestigations 返回某租户当前活跃(非终态)调查数,用于并发上限(文档 6.3)。
+func (s *Store) CountActiveInvestigations(ctx context.Context, tenant string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM investigations
+		 WHERE tenant_id=$1 AND phase NOT IN ('closed','cancelled','concluded','needs_human','triage_published')`,
+		tenant).Scan(&n)
+	return n, err
+}
+
 var _ = time.Now

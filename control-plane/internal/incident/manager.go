@@ -35,7 +35,7 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 	// resolved 信号:尝试解决对应 incident
 	groupingKey := GroupingKey(sig)
 	if sig.SignalType == "resolved" {
-		return m.handleResolved(ctx, groupingKey)
+		return m.handleResolved(ctx, sig, groupingKey)
 	}
 
 	inc := model.Incident{
@@ -70,9 +70,10 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 	return nil
 }
 
-func (m *Manager) handleResolved(ctx context.Context, groupingKey string) error {
-	// 直接按 grouping_key 找到 incident 并标记 resolved
-	inc, err := m.findByGroupingKey(ctx, groupingKey)
+func (m *Manager) handleResolved(ctx context.Context, sig model.Signal, groupingKey string) error {
+	// 按 grouping_key + tenant 找到 incident 并标记 resolved(tenant 显式过滤,
+	// 不再仅依赖 tenant 已编进 grouping_key 哈希的隐式隔离)。
+	inc, err := m.findByGroupingKey(ctx, groupingKey, orDefault(sig.TenantID))
 	if err != nil {
 		return nil // 找不到对应 incident,忽略
 	}
@@ -83,11 +84,11 @@ func (m *Manager) handleResolved(ctx context.Context, groupingKey string) error 
 	return nil
 }
 
-func (m *Manager) findByGroupingKey(ctx context.Context, key string) (model.Incident, error) {
+func (m *Manager) findByGroupingKey(ctx context.Context, key, tenant string) (model.Incident, error) {
 	row := m.store.Pool().QueryRow(ctx,
 		`SELECT incident_id, tenant_id, cluster_id, version, grouping_key, status, severity,
 		   title, COALESCE(fault_category,''), signal_count
-		 FROM incidents WHERE grouping_key=$1`, key)
+		 FROM incidents WHERE grouping_key=$1 AND tenant_id=$2`, key, tenant)
 	var inc model.Incident
 	err := row.Scan(&inc.IncidentID, &inc.TenantID, &inc.ClusterID, &inc.Version, &inc.GroupingKey,
 		&inc.Status, &inc.Severity, &inc.Title, &inc.FaultCategory, &inc.SignalCount)

@@ -24,11 +24,22 @@ type Orchestrator struct {
 	wf          WorkflowStarter
 	internalURL string
 	tenant      string
+	cooldownSec int
+	maxActive   int
 	log         *slog.Logger
 }
 
-func NewOrchestrator(s *store.Store, wf WorkflowStarter, internalURL, tenant string, log *slog.Logger) *Orchestrator {
-	return &Orchestrator{store: s, wf: wf, internalURL: internalURL, tenant: tenant, log: log}
+// Limits 触发策略的冷却/并发上限(文档 6.3 硬停止条件)。
+type Limits struct {
+	CooldownSec int
+	MaxActive   int
+}
+
+func NewOrchestrator(s *store.Store, wf WorkflowStarter, internalURL, tenant string, limits Limits, log *slog.Logger) *Orchestrator {
+	return &Orchestrator{
+		store: s, wf: wf, internalURL: internalURL, tenant: tenant,
+		cooldownSec: limits.CooldownSec, maxActive: limits.MaxActive, log: log,
+	}
 }
 
 // HandleIncidentEvent 消费 incidents topic(bus.Handler 签名)。
@@ -91,14 +102,38 @@ func (o *Orchestrator) StartInvestigation(ctx context.Context, incidentID, trigg
 	if err != nil {
 		return model.Investigation{}, fmt.Errorf("load incident: %w", err)
 	}
+	// 用 incident 自身的租户(多租户隔离),仅在缺失时回退到全局默认。
+	tenant := inc.TenantID
+	if tenant == "" {
+		tenant = o.tenant
+	}
 
 	active, err := o.store.HasActiveInvestigation(ctx, inc.IncidentID, inc.Version)
 	if err != nil {
 		return model.Investigation{}, err
 	}
-	if stop := StopReason(inc, active); stop != "" {
-		o.store.Audit(ctx, o.tenant, triggeredBy, "investigation_stopped", "incident", inc.IncidentID, "denied",
-			nil, map[string]any{"reason": stop})
+	// 冷却期:同 incident 上次调查距今秒数
+	sincePrior, hasPrior, err := o.store.SecondsSinceLastInvestigation(ctx, inc.IncidentID)
+	if err != nil {
+		return model.Investigation{}, err
+	}
+	// 并发上限:该租户当前活跃调查数
+	activeCount, err := o.store.CountActiveInvestigations(ctx, tenant)
+	if err != nil {
+		return model.Investigation{}, err
+	}
+	stopIn := StopInput{
+		Incident:             inc,
+		HasActiveSameVersion: active,
+		SecondsSincePrior:    sincePrior,
+		HasPrior:             hasPrior,
+		CooldownSec:          o.cooldownSec,
+		ActiveCount:          activeCount,
+		MaxActive:            o.maxActive,
+	}
+	if stop := StopReason(stopIn); stop != "" {
+		o.store.Audit(ctx, tenant, triggeredBy, "investigation_stopped", "incident", inc.IncidentID, "denied",
+			nil, map[string]any{"reason": stop, "active_count": activeCount})
 		return model.Investigation{}, &StopError{Reason: stop}
 	}
 
@@ -108,7 +143,7 @@ func (o *Orchestrator) StartInvestigation(ctx context.Context, incidentID, trigg
 	}
 	inv := model.Investigation{
 		InvestigationID: "inv-" + randHex(10),
-		TenantID:        o.tenant,
+		TenantID:        tenant,
 		IncidentID:      inc.IncidentID,
 		IncidentVersion: inc.Version,
 		WorkflowID:      fmt.Sprintf("investigation/%s/%d", inc.IncidentID, inc.Version),
@@ -136,14 +171,14 @@ func (o *Orchestrator) StartInvestigation(ctx context.Context, incidentID, trigg
 		InvestigationID:    inv.InvestigationID,
 		IncidentID:         inc.IncidentID,
 		IncidentVersion:    inc.Version,
-		TenantID:           o.tenant,
+		TenantID:           tenant,
 		ClusterID:          inc.ClusterID,
 		Budget:             budgetMap,
 		ControlInternalURL: o.internalURL,
 	})
 	if err != nil {
 		o.log.Warn("temporal start failed (investigation persisted)", "workflow", inv.WorkflowID, "err", err)
-		o.store.Audit(ctx, o.tenant, triggeredBy, "workflow_start_failed", "investigation", inv.InvestigationID, "error",
+		o.store.Audit(ctx, tenant, triggeredBy, "workflow_start_failed", "investigation", inv.InvestigationID, "error",
 			nil, map[string]any{"err": err.Error()})
 		return inv, nil
 	}
@@ -151,7 +186,7 @@ func (o *Orchestrator) StartInvestigation(ctx context.Context, incidentID, trigg
 	if err := o.store.SetInvestigationWorkflow(ctx, inv.InvestigationID, inv.WorkflowID, runID); err != nil {
 		o.log.Warn("set workflow id failed", "err", err)
 	}
-	o.store.Audit(ctx, o.tenant, triggeredBy, "investigation_started", "investigation", inv.InvestigationID, "ok",
+	o.store.Audit(ctx, tenant, triggeredBy, "investigation_started", "investigation", inv.InvestigationID, "ok",
 		map[string]any{"cluster": inc.ClusterID}, map[string]any{"reason": reason, "workflow_id": inv.WorkflowID})
 	o.log.Info("investigation started", "investigation_id", inv.InvestigationID, "workflow", inv.WorkflowID)
 	return inv, nil

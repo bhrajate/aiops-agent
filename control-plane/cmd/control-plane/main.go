@@ -134,7 +134,8 @@ func main() {
 	// ---- 组件装配 ----
 	gw := gateway.New(st, agent, rawStore, metrics, log)
 	mgr := incident.New(st, log)
-	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant, log)
+	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
+		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)
 	ingress := api.NewIngress(st, cfg.ClusterID, cfg.Tenant, cfg.WebhookSecret, metrics, log)
 
 	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
