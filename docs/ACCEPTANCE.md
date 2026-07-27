@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 1 | 原告警通知不依赖 AIOps Agent | ✅ | Signal Ingress 只接收并快速 2xx,不参与原通知链路;全链路异步 |
 | 2 | Signal 可持久化、重放并进入 DLQ | ✅ | 持久化 + Outbox + Kafka 至少一次;重试超限进 `dead_letters`(SECURITY §7),已验证 |
-| 3 | Incident 去重、聚合、版本、幂等测试通过 | ✅ | `internal/incident` + 测试;grouping_key 唯一约束;E2E 验证 version 递增 |
+| 3 | Incident 去重、聚合、版本、幂等测试通过 | ◐ | 去重/版本/幂等 ✅(`internal/incident` + 测试,grouping_key 唯一约束,E2E 验证 version 递增)。**聚合仅到"同资源去重"**:跨资源相关性以 `ComputeCorrelatedBlastRadius`(时间+namespace)在 incident 之上计算影响面,不合并 incident 实体;拓扑关联未实现。详见 [ARCHITECTURE 能力边界](ARCHITECTURE.md#能力边界设计意图-vs-当前实现) |
 | 4 | Temporal Workflow 可在 Worker 重启后恢复 | ✅ | Temporal 持久化 + 确定性 workflow + 幂等 Activity |
 | 5 | 所有外部调用均在 Activity 中执行 | ✅ | 模型/内部 API/工具调用全封装为 Activity |
 | 6 | LLM 无生产凭据,不能调用任意命令 | ✅ | 模型只经 Model Gateway;工具白名单只读;凭据不进模型 |

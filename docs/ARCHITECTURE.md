@@ -54,3 +54,20 @@
 - 工具全只读,白名单硬编码;`remediation_proposal` 强制 null。
 - 进入模型的证据经脱敏(`gateway/redact.go`)。
 - 工具结果作为数据,不作为指令;模型输出过结构化 schema 校验。
+
+## 能力边界(设计意图 vs 当前实现)
+
+架构设计文档描述的是**目标形态**;下表说明当前代码的实际边界,避免把设计意图读成已实现能力。
+
+| 主题 | 设计文档表述 | 当前实现 | 差距性质 |
+|---|---|---|---|
+| **平面分离** | 三平面可独立部署 | **逻辑分层清晰,控制面为单体进程**:Ingress/Incident Manager/Trigger/Tool Gateway/两个 API/Outbox/两个 consumer 同二进制(Helm 单 Deployment)。可按需拆分,但目前不能独立扩缩 | 部署粒度,非分层错误 |
+| **告警聚合** | 去重 + 相关告警聚合 + 拓扑关联 | `grouping_key` 把 resource 编进哈希,**只做到"同资源去重"**;跨资源相关性由 `ComputeCorrelatedBlastRadius`(tenant/cluster/namespace + 时间窗)在 incident **之上**计算影响面,但不合并 incident 实体 —— 值班人员仍看到 N 个独立 incident | 数据模型:去重与聚合共用一个键 |
+| **相关性含义** | 服务拓扑上下游关联 | 仅**时间 + namespace** 相关。`TopologyRefs`/`ChangeRefs` 全程为空,无写入点。**时间相关 ≠ 因果** | 缺拓扑数据源 |
+| **深度 RCA** | Planner + 并行 Analyzer 深度调查 | **计划先定、逐个执行**:Planner 先产出工具清单,采集期模型不参与,要追问需等下一轮。非 native tool-use。取舍换来可重放性与可预测预算,但**能力上界低于"自由追问式"RCA** | 有意取舍,上界真实存在 |
+| **多集群** | 每集群一个只读 Agent | Agent 侧按集群设计(独立 ID/SA/mTLS);但控制面只有**单个** `AIOPS_CLUSTER_AGENT_URL`,Gateway 不按 `cluster_id` 路由 → 实际仅接入一个集群 | 配置/路由未实现 |
+| **Cluster Agent 形态** | 推拉结合(含主动上报 Signal) | **仅 pull**:被动 HTTP 工具服务,无主动上报、无 K8s Event watch。瞬时事件若超出查询时间窗或被 K8s 回收即不可得 | 功能未实现 |
+| **证据时间窗** | 按需 | 由 `incident.first_seen` 推导(前置 15 分钟基线,上限 24h);模型不能自定义时间范围 | 已改进,仍非模型可控 |
+| **观测后端隔离** | 每集群一套 | Prometheus/Loki 查询强制注入 `namespace`,**未注入 `cluster` label**。共享后端(Thanos/Mimir)场景下,不同集群同名 namespace 会混淆 | 共享后端场景隔离不完整 |
+
+生产验收的逐项落地状态见 [ACCEPTANCE.md](ACCEPTANCE.md)。

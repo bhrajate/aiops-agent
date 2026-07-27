@@ -24,9 +24,9 @@ Signal
 | 目录 | 平面 | 语言 | 职责 |
 |---|---|---|---|
 | `shared/` | 契约 | SQL / JSON Schema | 冻结的数据契约:Signal / Incident / Investigation / Evidence / Hypothesis,及 PostgreSQL DDL |
-| `control-plane/` | 基础设施控制平面 | Go | Signal Ingress、Incident Manager、Trigger Policy、API + Workbench 后端、Tool Gateway |
+| `control-plane/` | 基础设施控制平面 | Go | Signal Ingress、Incident Manager、Trigger Policy、API + Workbench 后端、Tool Gateway(逻辑分层清晰,当前为单体进程部署) |
 | `ai-worker/` | AI 推理平面 | Python | Temporal RCA Worker:Investigation Workflow、Planner、Analyzers、Synthesizer、Model Gateway、Knowledge Service |
-| `cluster-agent/` | 集群数据平面 | Go | 每集群只读 Agent,暴露类型化只读工具 |
+| `cluster-agent/` | 集群数据平面 | Go | 每集群只读 Agent(pull 模式),暴露类型化只读工具 |
 | `frontend/` | 产品 | React + TS + Vite | Incident-first 的 Incident Workbench |
 | `deploy/` | 部署 | docker-compose | PostgreSQL+pgvector / Temporal / Redpanda / MinIO / Redis |
 | `docs/` | 文档 | Markdown | 架构映射、运行手册、API 说明 |
@@ -75,6 +75,8 @@ bash scripts/e2e.sh
 - **真实数据源**:cluster-agent 支持 mock(默认)/ live(client-go 只读 + Prometheus/Loki/Tempo)。
 
 详见 [`docs/SECURITY.md`](docs/SECURITY.md)、[`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md)、[`deploy/DEPLOY.md`](deploy/DEPLOY.md)。
+
+> **能力边界**:架构设计文档描述目标形态,部分主题(平面分离粒度、告警聚合深度、深度 RCA 上界、多集群路由、Agent 推拉形态)的实现边界与设计意图存在差距。逐项对照见 [`docs/ARCHITECTURE.md` 能力边界](docs/ARCHITECTURE.md#能力边界设计意图-vs-当前实现)。
 
 ## 设计约束(务必遵守)
 
