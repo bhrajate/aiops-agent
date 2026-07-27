@@ -2,6 +2,11 @@ module github.com/aiops/control-plane
 
 go 1.26.1
 
+// 固定已修补的工具链:go1.26.1 的 stdlib 有 12 个 govulncheck 判定为**已调用**
+// 的漏洞(crypto/tls、net/http、net/textproto 等),1.26.5 已全部修复。
+// CI 的 setup-go 读本文件,不钉住就会用带漏洞的工具链构建。
+toolchain go1.26.5
+
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0

@@ -60,6 +60,14 @@ jobs:
         run: uv sync --extra dev
       - name: pytest
         run: uv run pytest -q
+      # 对 AI 系统来说,质量门槛是最重要的回归护栏。它此前建好了却没接 CI
+      # (run.py 明确写了 "usable in CI"),等于没有护栏。CLI 门槛不过即非零退出。
+      #
+      # 注意能力边界:当前 golden case 是照着 mock provider 写的,所以这道门
+      # 守的是**管线不回归**(证据链、F2 降级、打分逻辑),不是真实模型质量。
+      # 接入真实 provider 后它才开始度量模型本身。
+      - name: 离线评测质量门槛 (architecture 18.1)
+        run: uv run python -m aiops_worker.evaluation.run
 
   # ---------------------------------------------------------------- Frontend
   frontend:
@@ -77,6 +85,49 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  # ---------------------------------------------------------------- Security scanning
+  security:
+    name: dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Go:官方漏洞库,按实际调用路径判定(比单纯比版本号误报少)。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: control-plane/go.mod
+      - name: govulncheck (go modules)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          for m in control-plane cluster-agent; do
+            echo ">> $m"
+            (cd "$m" && "$(go env GOPATH)/bin/govulncheck" ./...)
+          done
+
+      # 前端:只在 high/critical 上失败。moderate 大多来自构建期传递依赖,
+      # 卡在那一档会让 CI 长期红着,反而没人看告警。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm audit (frontend)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
+      # Python:pip-audit 查 PyPI 已知漏洞。
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: pip-audit (ai-worker)
+        working-directory: ai-worker
+        run: |
+          uv sync --extra dev
+          uv run --with pip-audit pip-audit
 
   # ---------------------------------------------------------------- Deploy artifacts lint
   deploy-lint:
