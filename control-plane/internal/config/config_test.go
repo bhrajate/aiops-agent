@@ -13,6 +13,9 @@ func base(prod bool) Config {
 		HS256Secret:   "a-strong-random-secret-of-length->=32-chars",
 		InternalToken: "internal-token",
 		WebhookSecret: "webhook-secret",
+		// 生产要求接真实观测后端并指明集群 label(否则会回退 mock / 跨集群串数据)
+		PrometheusURL: "http://prometheus:9090",
+		ClusterLabel:  "cluster",
 	}
 }
 
@@ -112,5 +115,36 @@ func TestHasRole(t *testing.T) {
 func TestValidate_ProdHappyPath(t *testing.T) {
 	if err := base(true).Validate(); err != nil {
 		t.Fatalf("完整生产配置不应失败: %v", err)
+	}
+}
+
+func TestValidate_ProdRejectsMockObservability(t *testing.T) {
+	t.Setenv("AIOPS_OBS_DATASOURCE", "mock")
+	if err := base(true).Validate(); err == nil {
+		t.Fatal("生产模式必须拒绝 mock 观测数据源(会产出虚假证据)")
+	}
+}
+
+func TestValidate_ProdRequiresObservabilityBackend(t *testing.T) {
+	c := base(true)
+	c.PrometheusURL, c.LokiURL, c.TempoURL = "", "", ""
+	if err := c.Validate(); err == nil {
+		t.Fatal("生产模式未配置任何观测后端应失败(否则回退 mock)")
+	}
+}
+
+func TestValidate_ProdRequiresClusterLabel(t *testing.T) {
+	c := base(true)
+	c.ClusterLabel = ""
+	if err := c.Validate(); err == nil {
+		t.Fatal("生产模式必须要求 AIOPS_CLUSTER_LABEL")
+	}
+}
+
+func TestValidate_DevAllowsMockObservability(t *testing.T) {
+	c := base(false)
+	c.PrometheusURL, c.LokiURL, c.TempoURL, c.ClusterLabel = "", "", "", ""
+	if err := c.Validate(); err != nil {
+		t.Fatalf("开发模式应允许 mock 观测数据源: %v", err)
 	}
 }

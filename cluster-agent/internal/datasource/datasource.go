@@ -25,13 +25,12 @@ type ResourceRef struct {
 // Scope is injected by the Tool Gateway and constrains every tool call to a
 // single cluster / namespace / resource / time window. Tools MUST honour it.
 //
-// Enforcement in the Live data source (see live.go / live_scope.go):
+// Enforcement in the Live data source (see live.go):
 //   - Kubernetes tools query only the scoped namespace (Namespaced clients).
-//   - Prometheus / Loki tools force-inject a `namespace="<ns>"` matcher into
-//     every selector and reject caller expressions that reference a different
-//     namespace; resource / namespace names are validated as DNS-1123 so they
-//     cannot break out of the query syntax.
-//   - The time window is clamped to a positive span no wider than 24h.
+//
+// 注:可观测性查询(Prometheus / Loki / Tempo)及其 label 强制注入、DNS-1123
+// 校验、时间窗上限等守卫已迁至控制面 control-plane/internal/obsquery
+// —— 那些后端是多集群共用的中心服务,不在任何集群内。本组件只做集群内 K8s 只读。
 type Scope struct {
 	ClusterID string      `json:"cluster_id"`
 	Namespace string      `json:"namespace"`
@@ -63,12 +62,6 @@ type DataSource interface {
 	GetWorkloadState(ctx context.Context, scope Scope, args map[string]any) (Result, error)
 	// GetKubernetesEvents returns recent Kubernetes events for the resource.
 	GetKubernetesEvents(ctx context.Context, scope Scope, args map[string]any) (Result, error)
-	// QueryMetrics evaluates a PromQL-style expression over the time range.
-	QueryMetrics(ctx context.Context, scope Scope, args map[string]any) (Result, error)
-	// SearchLogs returns matching log lines for the resource.
-	SearchLogs(ctx context.Context, scope Scope, args map[string]any) (Result, error)
-	// GetTraces returns distributed traces / spans for the resource.
-	GetTraces(ctx context.Context, scope Scope, args map[string]any) (Result, error)
 	// ListRecentChanges returns deploys, config and infra changes (first-class evidence).
 	ListRecentChanges(ctx context.Context, scope Scope, args map[string]any) (Result, error)
 	// InspectDependencies returns the service dependency edges around the resource.

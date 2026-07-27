@@ -46,8 +46,8 @@ func TestListTools(t *testing.T) {
 	}
 	mustJSON(t, rr.Body, &body)
 	want := []string{
-		"get_workload_state", "get_kubernetes_events", "query_metrics", "search_logs",
-		"get_traces", "list_recent_changes", "inspect_dependencies",
+		"get_workload_state", "get_kubernetes_events",
+		"list_recent_changes", "inspect_dependencies",
 	}
 	if len(body.Tools) != len(want) {
 		t.Fatalf("expected %d tools, got %d", len(want), len(body.Tools))
@@ -65,14 +65,14 @@ func TestListTools(t *testing.T) {
 func TestInvokeToolSuccess(t *testing.T) {
 	reqBody := `{"arguments":{},"scope":{"cluster_id":"prod-cn-1","namespace":"payment","resource":{"name":"checkout"}}}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tools/query_metrics", strings.NewReader(reqBody))
+	req := httptest.NewRequest(http.MethodPost, "/tools/get_workload_state", strings.NewReader(reqBody))
 	newTestServer().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
 	}
 	var res datasource.Result
 	mustJSON(t, rr.Body, &res)
-	if res.Source != "prometheus" || res.Summary == "" || res.Raw == nil {
+	if res.Source != "kubernetes" || res.Summary == "" || res.Raw == nil {
 		t.Errorf("unexpected result: %+v", res)
 	}
 }
@@ -112,7 +112,7 @@ func TestInvokeUnknownTool(t *testing.T) {
 func TestInvokeMissingNamespace(t *testing.T) {
 	reqBody := `{"scope":{"cluster_id":"prod-cn-1"}}`
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tools/get_traces", strings.NewReader(reqBody))
+	req := httptest.NewRequest(http.MethodPost, "/tools/get_kubernetes_events", strings.NewReader(reqBody))
 	newTestServer().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rr.Code, rr.Body.String())
@@ -121,7 +121,7 @@ func TestInvokeMissingNamespace(t *testing.T) {
 
 func TestInvokeBadJSON(t *testing.T) {
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tools/query_metrics", bytes.NewReader([]byte(`{not json`)))
+	req := httptest.NewRequest(http.MethodPost, "/tools/get_workload_state", bytes.NewReader([]byte(`{not json`)))
 	newTestServer().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
@@ -165,7 +165,7 @@ func TestInvokeBodyTooLarge(t *testing.T) {
 	b.WriteString(`"},"scope":{"namespace":"payment"}}`)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/tools/query_metrics", strings.NewReader(b.String()))
+	req := httptest.NewRequest(http.MethodPost, "/tools/get_workload_state", strings.NewReader(b.String()))
 	newTestServer().ServeHTTP(rr, req)
 	if rr.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d body=%s", rr.Code, rr.Body.String())

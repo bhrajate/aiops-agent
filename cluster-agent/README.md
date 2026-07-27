@@ -9,7 +9,7 @@
 - **默认只读**:没有任何写操作 / exec / SSH。所有工具只做查询,`DataSource` 接口不提供任何变更方法。
 - **可插拔数据源**:`internal/datasource.DataSource` 接口抽象后端。提供两种实现,由 `AIOPS_DATASOURCE` 选择(默认 `mock`):
   - **`mock`**(默认):确定性 Mock,同一 scope 永远返回同一份自洽证据,无任何 I/O。
-  - **`live`**:真实只读数据源 —— Kubernetes(`client-go`)+ Prometheus / Loki / Tempo(标准库 HTTP)。见下文「Live 真实数据源」。
+  - **`live`**:真实只读数据源 —— 集群内 Kubernetes(`client-go`,仅 Get/List)。见下文「Live 真实数据源」。
 - **范围注入**:每次调用由 Tool Gateway 传入 `scope`(cluster/namespace/resource/time_range)。`cluster_id` 缺省时回落到 Agent 配置的集群;`namespace` 必填。
 
 ## HTTP 接口
@@ -43,9 +43,6 @@
 |---|---|---|
 | `get_workload_state` | kubernetes | Deployment/ReplicaSet/Pod 健康、版本分布、就绪副本 |
 | `get_kubernetes_events` | kubernetes | 最近事件(BackOff/OOMKilling/Unhealthy 等) |
-| `query_metrics` | prometheus | PromQL 风格指标(错误率、延迟、CPU),按版本分序列 |
-| `search_logs` | loki | 关键错误日志行 |
-| `get_traces` | tempo | 调用链与瓶颈 span |
 | `list_recent_changes` | change-intel | 发布 / 配置 / 基础设施变更(一等证据) |
 | `inspect_dependencies` | topology | 上下游依赖边(错误率、延迟、来源、置信度) |
 
@@ -74,16 +71,13 @@ Mock 按 `namespace`/`resource` 映射到一个自洽的故障故事,覆盖设�
 | `get_kubernetes_events` | Kubernetes | `Events().List`,按 `involvedObject.name` 过滤目标资源 |
 | `list_recent_changes` | Kubernetes | `ReplicaSets().List`,按 `deployment.kubernetes.io/revision` 还原发布/镜像版本历史 |
 | `inspect_dependencies` | Kubernetes | `Deployments().Get` + `Services().List`,用 Service selector 匹配出上游入口边 |
-| `query_metrics` | Prometheus | `GET /api/v1/query_range`(标准库 HTTP) |
-| `search_logs` | Loki | `GET /loki/api/v1/query_range`(标准库 HTTP) |
-| `get_traces` | Tempo | `GET /api/search`(标准库 HTTP) |
 
 ### 只读铁律(READ-ONLY)
 
 Live 实现从三个层面保证只读,详见 `internal/datasource/live.go`、`kubernetes.go` 顶部注释:
 
 1. **Kubernetes**:只调用 `Get` / `List`,从不构造 `create/update/patch/delete/exec/attach/portforward`,`rest.Config` 仅用于构建读客户端,代码中不封装任何 write verb。client-go 显式设 `QPS=20 / Burst=40`,限制对 API Server 的客户端侧速率(纵深防御)。
-2. **Prometheus / Loki / Tempo**:仅访问各自的查询 GET 端点(query_range / search),无 remote-write、admin、delete-series 调用。上游响应用 `io.LimitReader`(32 MiB)封顶后再解码,防止上游把 Agent 撑爆(OOM)。
+2. **可观测性后端**:已**不再由本组件访问**。共享 Prometheus / Loki / Tempo 是多集群共用的中心服务,查询与其守卫已迁至控制面 `control-plane/internal/obsquery`(Tool Gateway 直连)。
 3. **优雅降级**:上游 URL 或 K8s 客户端缺失、或目标资源 `NotFound` 时返回 `unavailable` Result,不影响其余工具、不误报 500。
 
 ### scope 强制注入(namespace 隔离)
@@ -91,9 +85,8 @@ Live 实现从三个层面保证只读,详见 `internal/datasource/live.go`、`k
 `scope` 由 Tool Gateway 传入,cluster-agent **在数据源层强制执行**(不依赖 Gateway 裁剪,见 `internal/datasource/live_scope.go`):
 
 - **Kubernetes**:所有查询走 Namespaced 客户端,只落在 `scope.namespace`。
-- **Prometheus / Loki**:默认查询按 `namespace="<ns>"` 构造;调用方自定义 `expr` / `query` 时,向**每个** `{ ... }` 选择器强制注入 `namespace="<ns>"`,并**拒绝**引用其它 namespace 或使用非精确 `namespace` 匹配(`!=` / `=~` / `!~`)的表达式;缺少 `{ }` 选择器(无法限定)的表达式也一并拒绝。
+- **可观测性查询的范围强制**(PromQL/LogQL label 注入、`cluster`+`namespace` 双维度、跨范围拒绝、DNS-1123 校验、响应体上限、时间窗上限)已随代码迁至控制面 `control-plane/internal/obsquery`,不在本组件。
 - **注入安全**:`namespace` / `resource` 名先按 DNS-1123 字符白名单校验,无法用引号/花括号等突破 PromQL/LogQL 语法。
-- **时间窗**:窗口被夹紧为正向且不超过 24h;Prometheus `step` 按窗口自适应(样本点数 ≲1000)。
 
 ### 请求体 / 头部限制(DoS 防护)
 
@@ -112,9 +105,6 @@ cluster-agent 作为 TLS 服务端,可要求并校验调用方(control-plane)的
 | `AIOPS_CLUSTER_AGENT_ADDR` | `:9100` | 监听地址 |
 | `AIOPS_CLUSTER_ID` | `prod-cn-1` | scope 未带 cluster_id 时的回落值 |
 | `AIOPS_DATASOURCE` | `mock` | 数据源模式:`mock` \| `live` |
-| `AIOPS_PROM_URL` | (空) | live 模式 Prometheus 基址,如 `http://prometheus:9090` |
-| `AIOPS_LOKI_URL` | (空) | live 模式 Loki 基址,如 `http://loki:3100` |
-| `AIOPS_TEMPO_URL` | (空) | live 模式 Tempo 基址,如 `http://tempo:3200` |
 | `AIOPS_KUBECONFIG` | (空) | live 模式 kubeconfig 路径;为空时用 in-cluster,再回落 `~/.kube/config` |
 | `AIOPS_AGENT_TLS_ENABLED` | `false` | 开启 mTLS 服务端 |
 | `AIOPS_AGENT_TLS_CERT` | — | 服务端证书(PEM) |
@@ -138,7 +128,7 @@ make docker     # 多阶段构建镜像(scratch 运行时)
 ```bash
 make run    # 另开一个终端
 
-curl -s -XPOST localhost:9100/tools/query_metrics \
+curl -s -XPOST localhost:9100/tools/get_workload_state \
   -H 'Content-Type: application/json' \
   -d '{"arguments":{},"scope":{"cluster_id":"prod-cn-1","namespace":"payment","resource":"checkout"}}'
 ```
@@ -163,7 +153,6 @@ internal/server/
 
 ## 测试覆盖
 
-- **Prometheus / Loki / Tempo**:`net/http/httptest` mock 上游,验证 URL/path/query、响应解析、summary 生成与错误路径(`live_http_test.go`)。
 - **Kubernetes**:`client-go/kubernetes/fake` fake clientset 验证工作负载状态、事件过滤、ReplicaSet 版本历史排序、Service selector 依赖匹配(`kubernetes_test.go`)。
 - **降级**:未配置任何上游时全部工具返回 `unavailable` 且不 panic。
 - **mTLS**:测试内自签 CA/服务端/客户端证书,端到端验证「持证客户端可访问 / 无证书被握手拒绝」(`server/tls_test.go`)。

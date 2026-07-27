@@ -11,9 +11,6 @@ func toolMethods(ds DataSource) map[string]func(context.Context, Scope, map[stri
 	return map[string]func(context.Context, Scope, map[string]any) (Result, error){
 		"get_workload_state":    ds.GetWorkloadState,
 		"get_kubernetes_events": ds.GetKubernetesEvents,
-		"query_metrics":         ds.QueryMetrics,
-		"search_logs":           ds.SearchLogs,
-		"get_traces":            ds.GetTraces,
 		"list_recent_changes":   ds.ListRecentChanges,
 		"inspect_dependencies":  ds.InspectDependencies,
 	}
@@ -51,8 +48,8 @@ func TestMockAllToolsNonEmpty(t *testing.T) {
 
 func TestMockDeterministic(t *testing.T) {
 	scope := Scope{ClusterID: "prod-cn-1", Namespace: "payment", Resource: ResourceRef{Name: "checkout"}}
-	a, _ := NewMock().QueryMetrics(context.Background(), scope, nil)
-	b, _ := NewMock().QueryMetrics(context.Background(), scope, nil)
+	a, _ := NewMock().GetWorkloadState(context.Background(), scope, nil)
+	b, _ := NewMock().GetWorkloadState(context.Background(), scope, nil)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatal("mock output is not deterministic for identical scope")
 	}
@@ -73,33 +70,6 @@ func TestScopeInjectionIntoRaw(t *testing.T) {
 	}
 	if raw["namespace"] != "payment" {
 		t.Errorf("namespace not injected into raw: got %v", raw["namespace"])
-	}
-}
-
-func TestReleaseRegressionStoryIsVersionScoped(t *testing.T) {
-	scope := Scope{ClusterID: "prod-cn-1", Namespace: "payment", Resource: ResourceRef{Name: "checkout"}}
-	res, err := NewMock().QueryMetrics(context.Background(), scope, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw := res.Raw.(map[string]any)
-	series, ok := raw["series"].([]map[string]any)
-	if !ok || len(series) != 2 {
-		t.Fatalf("expected 2 version-scoped series, got %#v", raw["series"])
-	}
-	// Old-version series must stay at baseline; new-version series must peak higher.
-	var oldPeak, newPeak float64
-	for _, s := range series {
-		pts := s["points"].([]map[string]any)
-		last := pts[len(pts)-1]["v"].(float64)
-		if s["metric"].(map[string]string)["surface"] == "old" {
-			oldPeak = last
-		} else {
-			newPeak = last
-		}
-	}
-	if !(newPeak > oldPeak) {
-		t.Errorf("release regression should concentrate errors on new version: new=%v old=%v", newPeak, oldPeak)
 	}
 }
 

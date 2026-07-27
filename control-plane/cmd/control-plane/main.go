@@ -159,18 +159,18 @@ func main() {
 	// 这些后端是多集群共用的中心服务,不在任一 K8s 集群内,因此不再绕经集群 agent:
 	// 少一跳网络、少一个必经故障点(故障时不会同时失去 metrics/logs/traces)、
 	// 凭据只此一份。查询仍在 Gateway 之后,范围注入/脱敏/审计/预算一律不变。
-	var obsClient gateway.ObsQuerier
-	if oc := obsquery.New(obsquery.ConfigFromEnv()); oc.Configured() {
-		obsClient = oc
-		log.Info("observability backends connected directly", "backends", oc.Backends(),
+	obsQuerier, obsMode := obsquery.FromEnv()
+	obsClient := gateway.ObsQuerier(obsQuerier)
+	if obsMode == "live" {
+		log.Info("observability backends connected directly", "mode", obsMode,
 			"cluster_label", cfg.ClusterLabel)
 		if cfg.ClusterLabel == "" {
 			log.Warn("AIOPS_CLUSTER_LABEL 未设置:共享后端下无法按集群隔离," +
 				"不同集群的同名 namespace 可能混淆")
 		}
 	} else {
-		log.Warn("no observability backend configured (AIOPS_PROM_URL/LOKI_URL/TEMPO_URL); " +
-			"metrics/logs/traces tools will be denied")
+		log.Warn("observability datasource is MOCK (no AIOPS_PROM_URL/LOKI_URL/TEMPO_URL); " +
+			"metrics/logs/traces return deterministic demo data — 切勿用于生产")
 	}
 
 	// ---- 组件装配 ----

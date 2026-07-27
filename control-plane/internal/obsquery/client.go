@@ -32,6 +32,35 @@ func ConfigFromEnv() Config {
 	}
 }
 
+// Querier 是 Tool Gateway 使用的观测查询接口(真实后端或 mock 均实现它)。
+type Querier interface {
+	QueryMetrics(ctx context.Context, scope Scope, args map[string]any) (Result, error)
+	SearchLogs(ctx context.Context, scope Scope, args map[string]any) (Result, error)
+	GetTraces(ctx context.Context, scope Scope, args map[string]any) (Result, error)
+}
+
+// FromEnv 选择观测数据源并返回模式标签(供启动日志):
+//   - AIOPS_OBS_DATASOURCE=mock            → 强制 mock
+//   - 配置了任一后端 URL                    → live(直连真实后端)
+//   - 未配置任何后端(且未强制 live)         → mock,保证零基础设施也能端到端演示
+//
+// 说明:观测查询迁到控制面后,若此处直接拒绝,会打断 README 快速开始与
+// scripts/prod-e2e.sh 的零依赖演示路径,故保留 mock 回退。
+func FromEnv() (Querier, string) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("AIOPS_OBS_DATASOURCE")))
+	cfg := ConfigFromEnv()
+	switch mode {
+	case "mock":
+		return NewMock(), "mock"
+	case "live":
+		return New(cfg), "live"
+	}
+	if c := New(cfg); c.Configured() {
+		return c, "live"
+	}
+	return NewMock(), "mock"
+}
+
 // Client 查询共享观测后端。控制面的 Tool Gateway 直接使用它,
 // 不再绕经任何集群内 agent。
 type Client struct {

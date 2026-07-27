@@ -32,8 +32,6 @@ var _ DataSource = (*Live)(nil)
 type LiveConfig struct {
 	// Kubeconfig 为空表示使用集群内配置(in-cluster)。
 	Kubeconfig string
-	// HTTPTimeout 预留(当前 K8s 客户端自带超时配置)。
-	HTTPTimeout time.Duration
 }
 
 // NewLive 构造 live 数据源。K8s 客户端尽力构建:拿不到配置时 kube 为 nil,
@@ -122,21 +120,4 @@ func (l *Live) InspectDependencies(ctx context.Context, scope Scope, _ map[strin
 			"未获得集群内 Kubernetes 配置,依赖查询降级"), nil
 	}
 	return l.kube.dependencies(ctx, scope)
-}
-
-// ---- 可观测性工具:已迁至控制面,此处仅保留接口占位 ----
-
-func (l *Live) QueryMetrics(_ context.Context, scope Scope, _ map[string]any) (Result, error) {
-	return unavailable("prometheus", ns(scope), liveResource(scope),
-		"指标查询已迁至控制面直连共享后端(control-plane/internal/obsquery),cluster-agent 不再服务该工具"), nil
-}
-
-func (l *Live) SearchLogs(_ context.Context, scope Scope, _ map[string]any) (Result, error) {
-	return unavailable("loki", ns(scope), liveResource(scope),
-		"日志查询已迁至控制面直连共享后端(control-plane/internal/obsquery),cluster-agent 不再服务该工具"), nil
-}
-
-func (l *Live) GetTraces(_ context.Context, scope Scope, _ map[string]any) (Result, error) {
-	return unavailable("tempo", ns(scope), liveResource(scope),
-		"链路查询已迁至控制面直连共享后端(control-plane/internal/obsquery),cluster-agent 不再服务该工具"), nil
 }

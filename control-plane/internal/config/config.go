@@ -29,13 +29,17 @@ type Config struct {
 	ClusterAgentURL string // 单集群兼容:仅当未配置 ClusterAgents 时生效
 	// 多集群:cluster_id=url 逗号分隔,如 "prod-cn-1=https://a:9100,edge-eu-2=https://b:9100"
 	ClusterAgents string
-	// 共享观测后端(控制面直连):地址见 AIOPS_PROM_URL / LOKI_URL / TEMPO_URL
-	// (由 internal/obsquery 直接读取)。ClusterLabel 是后端中区分集群的 label 名,
-	// 多集群共用一套后端时必须设置,否则只按 namespace 过滤会跨集群串数据。
-	ClusterLabel string
-	InternalURL  string // 供 AI Worker 回写的内部 API base(下发给 workflow)
-	ClusterID    string
-	Tenant       string
+	// 共享观测后端(控制面直连)。URL 也由 internal/obsquery 直接读取环境变量,
+	// 这里保留副本用于启动校验(生产必须接真实后端,不能回退 mock)。
+	// ClusterLabel 是后端中区分集群的 label 名,多集群共用一套后端时必须设置,
+	// 否则只按 namespace 过滤会跨集群串数据。
+	PrometheusURL string
+	LokiURL       string
+	TempoURL      string
+	ClusterLabel  string
+	InternalURL   string // 供 AI Worker 回写的内部 API base(下发给 workflow)
+	ClusterID     string
+	Tenant        string
 
 	// 认证(SECURITY §1)
 	AuthMode     string // hs256 | oidc | disabled
@@ -241,6 +245,18 @@ func (c Config) Validate() error {
 			if c.AgentClientCert == "" || c.AgentClientKey == "" || c.AgentCA == "" {
 				problems = append(problems, "启用 mTLS 时必须配置 client cert/key/ca")
 			}
+		}
+		// 观测数据源:生产必须接真实后端。mock 会产出确定性假证据,
+		// 若在生产静默启用,RCA 会基于虚构数据得出"有证据支撑"的结论。
+		if strings.EqualFold(os.Getenv("AIOPS_OBS_DATASOURCE"), "mock") {
+			problems = append(problems, "生产模式不允许 AIOPS_OBS_DATASOURCE=mock(会产出虚假证据)")
+		} else if c.PrometheusURL == "" && c.LokiURL == "" && c.TempoURL == "" {
+			problems = append(problems,
+				"生产模式必须配置至少一个观测后端(AIOPS_PROM_URL / AIOPS_LOKI_URL / AIOPS_TEMPO_URL),否则将回退到 mock 假证据")
+		}
+		if c.ClusterLabel == "" {
+			problems = append(problems,
+				"生产模式必须设置 AIOPS_CLUSTER_LABEL(共享观测后端下用于按集群隔离,否则会跨集群串数据)")
 		}
 	}
 

@@ -97,34 +97,6 @@ func defaultTools() []Tool {
 			},
 		},
 		{
-			Name:        "query_metrics",
-			Description: "按 PromQL 风格表达式在时间范围内查询指标(错误率、延迟、CPU 等,只读)。",
-			Schema: obj(map[string]any{
-				"expr": strSchema("PromQL 风格查询表达式,缺省时按故障场景返回默认指标"),
-			}),
-			handler: func(ctx context.Context, ds datasource.DataSource, s datasource.Scope, a map[string]any) (datasource.Result, error) {
-				return ds.QueryMetrics(ctx, s, a)
-			},
-		},
-		{
-			Name:        "search_logs",
-			Description: "检索目标资源的日志行(只读)。",
-			Schema: obj(map[string]any{
-				"query": strSchema("日志过滤关键字或 LogQL 风格表达式"),
-			}),
-			handler: func(ctx context.Context, ds datasource.DataSource, s datasource.Scope, a map[string]any) (datasource.Result, error) {
-				return ds.SearchLogs(ctx, s, a)
-			},
-		},
-		{
-			Name:        "get_traces",
-			Description: "返回目标资源的分布式调用链与瓶颈 span(只读)。",
-			Schema:      obj(map[string]any{}),
-			handler: func(ctx context.Context, ds datasource.DataSource, s datasource.Scope, a map[string]any) (datasource.Result, error) {
-				return ds.GetTraces(ctx, s, a)
-			},
-		},
-		{
 			Name:        "list_recent_changes",
 			Description: "列出近期发布、配置与基础设施变更(一等证据,只读)。",
 			Schema:      obj(map[string]any{}),
