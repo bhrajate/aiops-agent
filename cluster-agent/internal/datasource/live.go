@@ -1,113 +1,60 @@
 package datasource
 
-// live.go implements the production, READ-ONLY DataSource.
+// live.go: 真实数据源(live 模式)。
 //
-// READ-ONLY GUARANTEE
-// -------------------
-// The Cluster Agent is read-only by contract (see package doc and
-// docs/SECURITY.md). The Live data source upholds this at three levels:
+// **职责已收窄为纯 Kubernetes 只读代理。**
+// 可观测性后端(Prometheus / Loki / Tempo)通常是多集群共用的中心服务,
+// 不在任何一个 K8s 集群内。由每集群的 agent 代理它们只会带来无谓的网络绕行、
+// N 份重复凭据,以及"某集群 agent 挂掉即同时失去 metrics/logs/traces"的
+// 可用性风险。因此这部分查询已迁到控制面
+// (control-plane/internal/obsquery,由 Tool Gateway 直连),
+// cluster-agent 只保留它真正必须在集群内做的事:访问该集群的 Kubernetes API。
 //
-//  1. Kubernetes: it only ever calls get/list on the typed client
-//     (kubeReader in kubernetes.go). It never constructs create/update/
-//     patch/delete/exec/attach/portforward requests, and the rest.Config is
-//     used solely to build a read client. No write verb is wrapped anywhere.
-//  2. Prometheus / Loki / Tempo: access is limited to their query HTTP GET
-//     endpoints (query_range / search). No remote-write, no admin API, no
-//     delete-series calls exist in this package.
-//  3. Graceful degradation: when an upstream URL (or the Kubernetes client)
-//     is not configured, the corresponding tool returns an "unavailable"
-//     Result instead of panicking, so a partial deployment stays safe.
-//
-// This mirrors the deterministic Mock so the Tool Gateway sees an identical
-// Result shape regardless of the active backend.
+// 本文件中的 QueryMetrics / SearchLogs / GetTraces 保留为接口占位,
+// 统一返回 unavailable —— 它们不再由本组件服务(Gateway 也不会路由到这里)。
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 )
 
-// Live is the real, read-only DataSource. Any sub-backend may be nil when its
-// URL / client is not configured; the owning tool then degrades gracefully.
+// Live 是基于集群内 Kubernetes API 的只读数据源。
 type Live struct {
-	prom         *promClient
-	loki         *lokiClient
-	tempo        *tempoClient
-	kube         *kubeReader
-	clusterLabel string // 观测后端区分集群的 label 名;空=后端为本集群专用
-	now          func() time.Time
-}
-
-// clusterScope 返回集群维度约束(clusterLabel 未配置时返回零值,表示不强制)。
-func (l *Live) clusterScope(scope Scope) ScopeLabel {
-	if l.clusterLabel == "" {
-		return ScopeLabel{}
-	}
-	return ScopeLabel{Name: l.clusterLabel, Value: scope.ClusterID}
+	kube *kubeReader
+	now  func() time.Time
 }
 
 var _ DataSource = (*Live)(nil)
 
-// LiveConfig configures the Live data source. Empty URLs disable the matching
-// backend (its tool degrades to an "unavailable" Result).
+// LiveConfig 配置 live 数据源。
 type LiveConfig struct {
-	PrometheusURL string
-	LokiURL       string
-	TempoURL      string
-	// Kubeconfig, when empty, means "try in-cluster config". Ignored on builds
-	// without client-go.
+	// Kubeconfig 为空表示使用集群内配置(in-cluster)。
 	Kubeconfig string
-	// HTTPTimeout bounds every upstream HTTP call. Zero -> 15s.
+	// HTTPTimeout 预留(当前 K8s 客户端自带超时配置)。
 	HTTPTimeout time.Duration
-	// ClusterLabel 是观测后端中区分集群的 label / tag 名(如 cluster、cluster_id、
-	// k8s_cluster;Tempo 侧常为 k8s.cluster.name)。**多集群共用一套
-	// Prometheus/Loki/Tempo 时必须设置**,否则只按 namespace 过滤会读到其他
-	// 集群的同名 namespace。为空表示后端为本集群专用,不做集群维度约束。
-	ClusterLabel string
 }
 
-// NewLive builds a Live data source from cfg. It never fails hard: a missing
-// upstream simply disables the matching tool. The Kubernetes client is built
-// best-effort; when client-go cannot produce a config, kube stays nil.
+// NewLive 构造 live 数据源。K8s 客户端尽力构建:拿不到配置时 kube 为 nil,
+// 对应工具优雅降级而非崩溃。
 func NewLive(cfg LiveConfig) *Live {
-	timeout := cfg.HTTPTimeout
-	if timeout <= 0 {
-		timeout = 15 * time.Second
-	}
-	hc := &http.Client{Timeout: timeout}
-
-	l := &Live{now: time.Now, clusterLabel: strings.TrimSpace(cfg.ClusterLabel)}
-	if u := strings.TrimSpace(cfg.PrometheusURL); u != "" {
-		l.prom = &promClient{base: strings.TrimRight(u, "/"), hc: hc}
-	}
-	if u := strings.TrimSpace(cfg.LokiURL); u != "" {
-		l.loki = &lokiClient{base: strings.TrimRight(u, "/"), hc: hc}
-	}
-	if u := strings.TrimSpace(cfg.TempoURL); u != "" {
-		l.tempo = &tempoClient{base: strings.TrimRight(u, "/"), hc: hc}
-	}
+	l := &Live{now: time.Now}
 	if kr, err := newKubeReader(cfg.Kubeconfig); err == nil {
 		l.kube = kr
 	}
 	return l
 }
 
-// LiveConfigFromEnv reads the AIOPS_* live-mode configuration.
+// LiveConfigFromEnv 读取 AIOPS_* live 模式配置。
 func LiveConfigFromEnv() LiveConfig {
 	return LiveConfig{
-		PrometheusURL: os.Getenv("AIOPS_PROM_URL"),
-		LokiURL:       os.Getenv("AIOPS_LOKI_URL"),
-		TempoURL:      os.Getenv("AIOPS_TEMPO_URL"),
-		Kubeconfig:    os.Getenv("AIOPS_KUBECONFIG"),
-		ClusterLabel:  os.Getenv("AIOPS_CLUSTER_LABEL"),
+		Kubeconfig: os.Getenv("AIOPS_KUBECONFIG"),
 	}
 }
 
-// FromEnv selects the DataSource implementation from AIOPS_DATASOURCE
-// (mock | live; default mock) and returns it together with the chosen mode
-// label for startup logging.
+// FromEnv 依据 AIOPS_DATASOURCE(mock | live;默认 mock)选择实现,
+// 并返回模式标签供启动日志使用。
 func FromEnv() (DataSource, string) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("AIOPS_DATASOURCE"))) {
 	case "live":
@@ -117,8 +64,7 @@ func FromEnv() (DataSource, string) {
 	}
 }
 
-// unavailable builds a well-formed Result for a backend that is not configured,
-// so tools degrade gracefully instead of erroring or panicking.
+// unavailable 为未接入的后端构造良性 Result,使工具优雅降级。
 func unavailable(source, namespace, resource, why string) Result {
 	return Result{
 		Source:  source + "/unavailable",
@@ -133,117 +79,64 @@ func unavailable(source, namespace, resource, why string) Result {
 	}
 }
 
-// maxWindow bounds the effective query window. A caller-supplied range wider
-// than this is truncated (keeping the requested "to" and pulling "from"
-// forward) so a single query cannot ask an upstream for an unbounded span of
-// samples/logs and exhaust memory or the upstream itself.
-const maxWindow = 24 * time.Hour
+// liveResource 返回作用域资源名。
+func liveResource(scope Scope) string { return scope.ResourceName() }
 
-// window resolves the effective query window from the scope, defaulting to the
-// last 5 minutes ending "now". The window is clamped so it is always positive
-// and never wider than maxWindow.
-func (l *Live) window(scope Scope) (from, to time.Time) {
-	to = l.now().UTC()
-	from = to.Add(-5 * time.Minute)
-	if scope.TimeRange != nil {
-		if t, err := time.Parse(time.RFC3339, scope.TimeRange.From); err == nil {
-			from = t
-		}
-		if t, err := time.Parse(time.RFC3339, scope.TimeRange.To); err == nil {
-			to = t
-		}
+// orAll 用于摘要:空资源名显示为 "*"。
+func orAll(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "*"
 	}
-	// Guard against inverted or empty ranges: fall back to a 5m lookback.
-	if !to.After(from) {
-		from = to.Add(-5 * time.Minute)
-	}
-	// Truncate an over-wide window to the most recent maxWindow.
-	if to.Sub(from) > maxWindow {
-		from = to.Add(-maxWindow)
-	}
-	return from, to
+	return s
 }
 
-// promStep picks a query_range step that keeps the returned sample count
-// bounded (~<=1000 points) regardless of how wide the window is, so Prometheus
-// is never asked to materialise a massive matrix.
-func promStep(from, to time.Time) time.Duration {
-	const targetPoints = 1000
-	step := 60 * time.Second
-	d := to.Sub(from)
-	if d <= 0 {
-		return step
-	}
-	if d < step {
-		return d
-	}
-	if min := d / targetPoints; min > step {
-		// Round up to whole seconds for a clean step value.
-		step = (min/time.Second + 1) * time.Second
-	}
-	return step
-}
+// ---- Kubernetes 只读工具(本组件的核心职责)----
 
-// liveResource returns the effective resource name from the scope.
-func liveResource(scope Scope) string {
-	if r := scope.ResourceName(); r != "" {
-		return r
-	}
-	return ""
-}
-
-// --- DataSource dispatch: Kubernetes-backed tools ---
-
-func (l *Live) GetWorkloadState(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
+func (l *Live) GetWorkloadState(ctx context.Context, scope Scope, _ map[string]any) (Result, error) {
 	if l.kube == nil {
-		return unavailable("kubernetes", ns(scope), liveResource(scope), "未配置 Kubernetes 客户端(in-cluster/kubeconfig 均不可用),工作负载查询降级"), nil
+		return unavailable("kubernetes", ns(scope), liveResource(scope),
+			"未获得集群内 Kubernetes 配置,工作负载查询降级"), nil
 	}
 	return l.kube.workloadState(ctx, scope)
 }
 
-func (l *Live) GetKubernetesEvents(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
+func (l *Live) GetKubernetesEvents(ctx context.Context, scope Scope, _ map[string]any) (Result, error) {
 	if l.kube == nil {
-		return unavailable("kubernetes", ns(scope), liveResource(scope), "未配置 Kubernetes 客户端,事件查询降级"), nil
+		return unavailable("kubernetes", ns(scope), liveResource(scope),
+			"未获得集群内 Kubernetes 配置,事件查询降级"), nil
 	}
 	return l.kube.events(ctx, scope)
 }
 
-func (l *Live) ListRecentChanges(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
+func (l *Live) ListRecentChanges(ctx context.Context, scope Scope, _ map[string]any) (Result, error) {
 	if l.kube == nil {
-		return unavailable("change-intel", ns(scope), liveResource(scope), "未配置 Kubernetes 客户端,变更(ReplicaSet 版本历史)查询降级"), nil
+		return unavailable("kubernetes", ns(scope), liveResource(scope),
+			"未获得集群内 Kubernetes 配置,变更查询降级"), nil
 	}
 	return l.kube.recentChanges(ctx, scope)
 }
 
-func (l *Live) InspectDependencies(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
+func (l *Live) InspectDependencies(ctx context.Context, scope Scope, _ map[string]any) (Result, error) {
 	if l.kube == nil {
-		return unavailable("topology", ns(scope), liveResource(scope), "未配置 Kubernetes 客户端,依赖拓扑查询降级"), nil
+		return unavailable("kubernetes", ns(scope), liveResource(scope),
+			"未获得集群内 Kubernetes 配置,依赖查询降级"), nil
 	}
 	return l.kube.dependencies(ctx, scope)
 }
 
-// --- DataSource dispatch: HTTP-backed tools ---
+// ---- 可观测性工具:已迁至控制面,此处仅保留接口占位 ----
 
-func (l *Live) QueryMetrics(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
-	if l.prom == nil {
-		return unavailable("prometheus", ns(scope), liveResource(scope), "未配置 AIOPS_PROM_URL,指标查询降级"), nil
-	}
-	from, to := l.window(scope)
-	return l.prom.queryRange(ctx, scope, args, from, to, l.clusterScope(scope))
+func (l *Live) QueryMetrics(_ context.Context, scope Scope, _ map[string]any) (Result, error) {
+	return unavailable("prometheus", ns(scope), liveResource(scope),
+		"指标查询已迁至控制面直连共享后端(control-plane/internal/obsquery),cluster-agent 不再服务该工具"), nil
 }
 
-func (l *Live) SearchLogs(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
-	if l.loki == nil {
-		return unavailable("loki", ns(scope), liveResource(scope), "未配置 AIOPS_LOKI_URL,日志查询降级"), nil
-	}
-	from, to := l.window(scope)
-	return l.loki.queryRange(ctx, scope, args, from, to, l.clusterScope(scope))
+func (l *Live) SearchLogs(_ context.Context, scope Scope, _ map[string]any) (Result, error) {
+	return unavailable("loki", ns(scope), liveResource(scope),
+		"日志查询已迁至控制面直连共享后端(control-plane/internal/obsquery),cluster-agent 不再服务该工具"), nil
 }
 
-func (l *Live) GetTraces(ctx context.Context, scope Scope, args map[string]any) (Result, error) {
-	if l.tempo == nil {
-		return unavailable("tempo", ns(scope), liveResource(scope), "未配置 AIOPS_TEMPO_URL,链路查询降级"), nil
-	}
-	from, to := l.window(scope)
-	return l.tempo.search(ctx, scope, args, from, to, l.clusterScope(scope))
+func (l *Live) GetTraces(_ context.Context, scope Scope, _ map[string]any) (Result, error) {
+	return unavailable("tempo", ns(scope), liveResource(scope),
+		"链路查询已迁至控制面直连共享后端(control-plane/internal/obsquery),cluster-agent 不再服务该工具"), nil
 }

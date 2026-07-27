@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 import (
 	"context"
@@ -69,7 +69,7 @@ func TestPromNamespaceInjected(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
 	}))
 	defer srv.Close()
-	l := NewLive(LiveConfig{PrometheusURL: srv.URL})
+	l := New(Config{PrometheusURL: srv.URL})
 
 	// Default expression.
 	if _, err := l.QueryMetrics(context.Background(), liveScope(), map[string]any{}); err != nil {
@@ -94,7 +94,7 @@ func TestPromCrossNamespaceRejected(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
 	}))
 	defer srv.Close()
-	l := NewLive(LiveConfig{PrometheusURL: srv.URL})
+	l := New(Config{PrometheusURL: srv.URL})
 	_, err := l.QueryMetrics(context.Background(), liveScope(), map[string]any{"expr": `up{namespace="other"}`})
 	if err == nil {
 		t.Fatal("expected cross-namespace query to be rejected")
@@ -108,7 +108,7 @@ func TestLokiNamespaceInjected(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"streams","result":[]}}`))
 	}))
 	defer srv.Close()
-	l := NewLive(LiveConfig{LokiURL: srv.URL})
+	l := New(Config{LokiURL: srv.URL})
 	_, err := l.SearchLogs(context.Background(), liveScope(), map[string]any{"query": `{app="checkout"} |= "error"`})
 	if err != nil {
 		t.Fatalf("SearchLogs: %v", err)
@@ -120,13 +120,12 @@ func TestLokiNamespaceInjected(t *testing.T) {
 
 func TestWindowClampedToMax(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	l := &Live{now: func() time.Time { return now }}
 	scope := liveScope()
 	scope.TimeRange = &TimeRange{
 		From: now.Add(-100 * time.Hour).Format(time.RFC3339),
 		To:   now.Format(time.RFC3339),
 	}
-	from, to := l.window(scope)
+	from, to := window(scope, func() time.Time { return now })
 	if d := to.Sub(from); d > maxWindow {
 		t.Errorf("window %v exceeds max %v", d, maxWindow)
 	}
@@ -137,13 +136,12 @@ func TestWindowClampedToMax(t *testing.T) {
 
 func TestWindowInvertedFallback(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	l := &Live{now: func() time.Time { return now }}
 	scope := liveScope()
 	scope.TimeRange = &TimeRange{
 		From: now.Format(time.RFC3339),
 		To:   now.Add(-time.Hour).Format(time.RFC3339), // to < from
 	}
-	from, to := l.window(scope)
+	from, to := window(scope, func() time.Time { return now })
 	if !to.After(from) {
 		t.Errorf("window not positive: from=%v to=%v", from, to)
 	}

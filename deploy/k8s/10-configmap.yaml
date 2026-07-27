@@ -51,3 +51,14 @@ data:
 
   # ---- 可靠性 ----
   AIOPS_MAX_DELIVERY_ATTEMPTS: "5"
+
+  # ---- 共享可观测性后端(控制面直连;多集群共用一套)----
+  # 这些后端不在任何 K8s 集群内,由控制面 Tool Gateway 直接查询
+  # (control-plane/internal/obsquery),不再绕经 cluster-agent。
+  AIOPS_PROM_URL: "http://prometheus.observability.svc:9090"
+  AIOPS_LOKI_URL: "http://loki.observability.svc:3100"
+  AIOPS_TEMPO_URL: "http://tempo.observability.svc:3200"
+  # 后端中区分集群的 label / tag 名。多集群共用一套后端时**必须**设置,
+  # 否则只按 namespace 过滤会读到其他集群的同名 namespace。
+  # 常见:cluster / cluster_id / k8s_cluster(Tempo 侧常为 k8s.cluster.name)。
+  AIOPS_CLUSTER_LABEL: "cluster"

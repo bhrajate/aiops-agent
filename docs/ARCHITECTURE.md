@@ -68,6 +68,6 @@
 | **多集群** | 每集群一个只读 Agent | ✅ 已实现:`AIOPS_CLUSTER_AGENTS`(cluster_id→URL 映射)+ Gateway 按 `incident.cluster_id` 路由;未配置的集群**拒绝**工具调用(`no_agent_for_cluster`)而非回退,避免跨集群误读。未配置映射时退化为单集群兼容模式 | 已闭合 |
 | **Cluster Agent 形态** | 推拉结合(含主动上报 Signal) | **仅 pull**:被动 HTTP 工具服务,无主动上报、无 K8s Event watch。瞬时事件若超出查询时间窗或被 K8s 回收即不可得 | 功能未实现 |
 | **证据时间窗** | 按需 | 由 `incident.first_seen` 推导(前置 15 分钟基线,上限 24h);模型不能自定义时间范围 | 已改进,仍非模型可控 |
-| **观测后端隔离** | 每集群一套 或 中心共享 | ✅ **两点已闭合**:①查询强制注入 `namespace` + `cluster`(`AIOPS_CLUSTER_LABEL`,AST 级,拒绝跨集群 matcher);②**按数据源归属路由**:观测类工具(query_metrics/search_logs/get_traces)走中心 Observability Agent(`AIOPS_OBSERVABILITY_AGENT_URL`),不再绕经集群 agent;K8s 类仍走集群 agent。凭据集中一份、不进 ai-worker | 已闭合 |
+| **观测后端隔离** | 每集群一套 或 中心共享 | ✅ **观测查询已迁至控制面直连**(`control-plane/internal/obsquery`):共享 Prometheus/Loki/Tempo 不在任何集群内,由 Tool Gateway 直接查询,不再绕经 cluster-agent(少一跳、少一个必经故障点、凭据一份)。守卫完整随迁:PromQL AST 级 label 强制注入(防裸选择器绕过)、LogQL 流选择器注入、`cluster`+`namespace` 双维度强制(`AIOPS_CLUSTER_LABEL`)、跨范围 matcher 拒绝、DNS-1123 校验、响应体上限、时间窗上限。cluster-agent 收窄为**纯 K8s 只读代理**。**权衡**:控制面因此持有观测后端凭据;若控制面威胁模型变化(暴露到更不可信网络),这是第一个应回退的决定 | 已闭合(含权衡记录) |
 
 生产验收的逐项落地状态见 [ACCEPTANCE.md](ACCEPTANCE.md)。

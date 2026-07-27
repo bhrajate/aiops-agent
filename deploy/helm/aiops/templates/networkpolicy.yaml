@@ -167,6 +167,18 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $eg.clusterAgentPort }}
+    # 共享可观测后端:控制面直连 Prometheus / Loki / Tempo(观测查询已迁至控制面)。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.monitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ $eg.prometheusPort }}
+        - protocol: TCP
+          port: {{ $eg.lokiPort }}
+        - protocol: TCP
+          port: {{ $eg.tempoHttpPort }}
     # 外部 HTTPS 443:企业 OIDC/JWKS 与外部 S3(排除私网防 SSRF)。生产
     # authMode=oidc + 外部 s3Endpoint 依赖此规则,否则 default-deny 阻断鉴权/证据写入。
     - to:
@@ -251,19 +263,8 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $eg.externalHttpsPort }}
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $eg.monitoringNamespace }}
-      ports:
-        - protocol: TCP
-          port: {{ $eg.prometheusPort }}
-        - protocol: TCP
-          port: {{ $eg.lokiPort }}
-        - protocol: TCP
-          port: {{ $eg.tempoHttpPort }}
-        - protocol: TCP
-          port: {{ $eg.tempoOtlpPort }}
+    # 注:可观测后端已改由**控制面直连**(control-plane/internal/obsquery),
+    # cluster-agent 不再访问它们;相应规则见 control-plane-egress。
 ---
 # frontend 出站:仅访问 control-plane 公共 API :8088。
 apiVersion: networking.k8s.io/v1

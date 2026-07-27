@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 // live_tempo.go: read-only Tempo HTTP API client.
 // Only GET /api/search is used (trace discovery). No ingest / delete API.

@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 import (
 	"context"
@@ -25,7 +25,7 @@ func TestLivePrometheusQueryRange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := NewLive(LiveConfig{PrometheusURL: srv.URL})
+	l := New(Config{PrometheusURL: srv.URL})
 	res, err := l.QueryMetrics(context.Background(), liveScope(), map[string]any{})
 	if err != nil {
 		t.Fatalf("QueryMetrics: %v", err)
@@ -54,7 +54,7 @@ func TestLivePrometheusError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"parse error"}`))
 	}))
 	defer srv.Close()
-	l := NewLive(LiveConfig{PrometheusURL: srv.URL})
+	l := New(Config{PrometheusURL: srv.URL})
 	if _, err := l.QueryMetrics(context.Background(), liveScope(), nil); err == nil {
 		t.Fatal("expected error on prometheus status=error")
 	}
@@ -73,7 +73,7 @@ func TestLiveLokiQueryRange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := NewLive(LiveConfig{LokiURL: srv.URL})
+	l := New(Config{LokiURL: srv.URL})
 	res, err := l.SearchLogs(context.Background(), liveScope(), map[string]any{})
 	if err != nil {
 		t.Fatalf("SearchLogs: %v", err)
@@ -111,7 +111,7 @@ func TestLiveTempoSearch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	l := NewLive(LiveConfig{TempoURL: srv.URL})
+	l := New(Config{TempoURL: srv.URL})
 	res, err := l.GetTraces(context.Background(), liveScope(), map[string]any{})
 	if err != nil {
 		t.Fatalf("GetTraces: %v", err)
@@ -134,7 +134,7 @@ func TestLiveTempoSearch(t *testing.T) {
 func TestLiveGracefulDegradation(t *testing.T) {
 	// No URLs, no kube client configured: every tool must return an
 	// "unavailable" Result, never panic or error.
-	l := NewLive(LiveConfig{})
+	l := New(Config{})
 	scope := liveScope()
 	cases := map[string]func() (Result, error){
 		"metrics": func() (Result, error) { return l.QueryMetrics(context.Background(), scope, nil) },
@@ -156,24 +156,31 @@ func TestLiveGracefulDegradation(t *testing.T) {
 	}
 }
 
-func TestFromEnvSelectsMockByDefault(t *testing.T) {
-	t.Setenv("AIOPS_DATASOURCE", "")
-	ds, mode := FromEnv()
-	if mode != "mock" {
-		t.Errorf("mode = %q, want mock", mode)
+func TestConfigFromEnv(t *testing.T) {
+	t.Setenv("AIOPS_PROM_URL", "http://prom:9090")
+	t.Setenv("AIOPS_LOKI_URL", "http://loki:3100")
+	t.Setenv("AIOPS_TEMPO_URL", "http://tempo:3200")
+	t.Setenv("AIOPS_CLUSTER_LABEL", "cluster_id")
+	cfg := ConfigFromEnv()
+	if cfg.PrometheusURL != "http://prom:9090" || cfg.LokiURL != "http://loki:3100" ||
+		cfg.TempoURL != "http://tempo:3200" || cfg.ClusterLabel != "cluster_id" {
+		t.Errorf("ConfigFromEnv mismatch: %+v", cfg)
 	}
-	if _, ok := ds.(*Mock); !ok {
-		t.Errorf("default datasource is not *Mock: %T", ds)
+	c := New(cfg)
+	if !c.Configured() {
+		t.Error("三个后端都配置了,Configured 应为 true")
+	}
+	if len(c.Backends()) != 3 {
+		t.Errorf("Backends() = %v, want 3", c.Backends())
 	}
 }
 
-func TestFromEnvSelectsLive(t *testing.T) {
-	t.Setenv("AIOPS_DATASOURCE", "live")
-	ds, mode := FromEnv()
-	if mode != "live" {
-		t.Errorf("mode = %q, want live", mode)
+func TestNotConfigured(t *testing.T) {
+	c := New(Config{})
+	if c.Configured() {
+		t.Error("空配置 Configured 应为 false")
 	}
-	if _, ok := ds.(*Live); !ok {
-		t.Errorf("live datasource is not *Live: %T", ds)
+	if len(c.Backends()) != 0 {
+		t.Errorf("空配置不应有后端: %v", c.Backends())
 	}
 }

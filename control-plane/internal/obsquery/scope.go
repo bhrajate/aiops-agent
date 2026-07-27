@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 // live_scope.go: scope-enforcement helpers for the HTTP-backed data sources.
 //

@@ -5,67 +5,114 @@ import (
 	"testing"
 
 	"github.com/aiops/control-plane/internal/agentclient"
+	"github.com/aiops/control-plane/internal/obsquery"
 )
 
-type fakeInvoker struct{ name string }
+// fakeObs 记录被调用的观测工具,验证控制面直连路径。
+type fakeObs struct{ called string }
 
-func (f *fakeInvoker) Invoke(_ context.Context, _ string, _ map[string]any, _ agentclient.Scope) (agentclient.ToolResult, error) {
-	return agentclient.ToolResult{Source: f.name}, nil
+func (f *fakeObs) QueryMetrics(_ context.Context, _ obsquery.Scope, _ map[string]any) (obsquery.Result, error) {
+	f.called = "query_metrics"
+	return obsquery.Result{Source: "prometheus", Summary: "ok", Raw: map[string]any{"k": 1}}, nil
 }
 
-func TestInvokerFor_ObservabilityGoesCentral(t *testing.T) {
-	clusterAgent := &fakeInvoker{name: "cluster"}
-	central := &fakeInvoker{name: "central"}
-	g := &Gateway{
-		agents: agentclient.NewRegistry(map[string]*agentclient.Client{}, nil),
-		obs:    central,
-	}
-	// registry 空但有 fallback? 这里用 obs 覆盖观测类;K8s 类需要 agent。
-	// 为隔离路由逻辑,单独构造带 fallback 的 registry:
-	g.agents = agentclient.NewRegistry(nil, nil)
-	_ = clusterAgent
+func (f *fakeObs) SearchLogs(_ context.Context, _ obsquery.Scope, _ map[string]any) (obsquery.Result, error) {
+	f.called = "search_logs"
+	return obsquery.Result{Source: "loki", Summary: "ok", Raw: map[string]any{}}, nil
+}
 
-	// 观测类 → 中心
+func (f *fakeObs) GetTraces(_ context.Context, _ obsquery.Scope, _ map[string]any) (obsquery.Result, error) {
+	f.called = "get_traces"
+	return obsquery.Result{Source: "tempo", Summary: "ok", Raw: map[string]any{}}, nil
+}
+
+// 观测类工具由控制面直连共享后端处理(不经任何集群 agent)。
+func TestObservabilityToolsGoDirect(t *testing.T) {
 	for _, tool := range []string{"query_metrics", "search_logs", "get_traces"} {
-		inv, err := g.invokerFor(tool, "prod-cn-1")
-		if err != nil || inv != central {
-			t.Errorf("%s 应路由到中心 obs agent, err=%v", tool, err)
+		fo := &fakeObs{}
+		g := &Gateway{obs: fo}
+		scope := agentclient.Scope{
+			ClusterID: "prod-cn-1",
+			Namespace: "payment",
+			Resource:  map[string]any{"kind": "Deployment", "name": "checkout"},
+			TimeRange: map[string]any{"from": "2026-07-27T00:00:00Z", "to": "2026-07-27T01:00:00Z"},
 		}
-	}
-}
-
-func TestInvokerFor_K8sGoesPerCluster(t *testing.T) {
-	central := &fakeInvoker{name: "central"}
-	a := agentclient.New("http://a:9100")
-	g := &Gateway{
-		agents: agentclient.NewRegistry(map[string]*agentclient.Client{"prod-cn-1": a}, nil),
-		obs:    central,
-	}
-	// K8s 类 → 该集群 agent(不是 central)
-	for _, tool := range []string{"get_workload_state", "get_kubernetes_events", "inspect_dependencies"} {
-		inv, err := g.invokerFor(tool, "prod-cn-1")
+		res, err := g.invokeObservability(context.Background(), tool, map[string]any{}, scope)
 		if err != nil {
 			t.Fatalf("%s: %v", tool, err)
 		}
-		if inv == ToolInvoker(central) {
-			t.Errorf("%s 不应走中心 obs agent", tool)
+		if fo.called != tool {
+			t.Errorf("期望直连调用 %s,实际 %s", tool, fo.called)
 		}
-	}
-	// K8s 类打到未配置集群 → 拒绝(不回退)
-	if _, err := g.invokerFor("get_workload_state", "unknown"); err == nil {
-		t.Error("未配置集群的 K8s 工具应被拒绝")
+		if res.Summary == "" {
+			t.Errorf("%s: 结果应带 summary", tool)
+		}
 	}
 }
 
-func TestInvokerFor_NoCentralFallsBackToCluster(t *testing.T) {
-	// 未配置中心 obs agent 时,观测类回退到集群 agent(每集群自带后端)
-	a := agentclient.New("http://a:9100")
-	g := &Gateway{
-		agents: agentclient.NewRegistry(map[string]*agentclient.Client{"prod-cn-1": a}, nil),
-		obs:    nil,
+// scope 应被完整转换传入 obsquery(集群/命名空间/资源/时间窗)。
+type scopeCapture struct{ got obsquery.Scope }
+
+func (s *scopeCapture) QueryMetrics(_ context.Context, sc obsquery.Scope, _ map[string]any) (obsquery.Result, error) {
+	s.got = sc
+	return obsquery.Result{Raw: map[string]any{}}, nil
+}
+func (s *scopeCapture) SearchLogs(_ context.Context, sc obsquery.Scope, _ map[string]any) (obsquery.Result, error) {
+	s.got = sc
+	return obsquery.Result{Raw: map[string]any{}}, nil
+}
+func (s *scopeCapture) GetTraces(_ context.Context, sc obsquery.Scope, _ map[string]any) (obsquery.Result, error) {
+	s.got = sc
+	return obsquery.Result{Raw: map[string]any{}}, nil
+}
+
+func TestObservabilityScopeIsPropagated(t *testing.T) {
+	sc := &scopeCapture{}
+	g := &Gateway{obs: sc}
+	in := agentclient.Scope{
+		ClusterID: "prod-cn-1",
+		Namespace: "payment",
+		Resource:  map[string]any{"kind": "Deployment", "name": "checkout", "uid": "u-1"},
+		TimeRange: map[string]any{"from": "2026-07-27T00:00:00Z", "to": "2026-07-27T01:00:00Z"},
 	}
-	inv, err := g.invokerFor("query_metrics", "prod-cn-1")
-	if err != nil || inv == nil {
-		t.Errorf("无中心 agent 时观测类应回退到集群 agent, err=%v", err)
+	if _, err := g.invokeObservability(context.Background(), "query_metrics", nil, in); err != nil {
+		t.Fatal(err)
+	}
+	if sc.got.ClusterID != "prod-cn-1" || sc.got.Namespace != "payment" {
+		t.Errorf("集群/命名空间未传递: %+v", sc.got)
+	}
+	if sc.got.Resource.Name != "checkout" || sc.got.Resource.Kind != "Deployment" {
+		t.Errorf("资源未传递: %+v", sc.got.Resource)
+	}
+	if sc.got.TimeRange == nil || sc.got.TimeRange.From == "" {
+		t.Errorf("时间窗未传递: %+v", sc.got.TimeRange)
+	}
+}
+
+func TestObservabilityToolSetIsExactlyThree(t *testing.T) {
+	// 观测类 = 共享后端;其余工具仍走集群 agent(需集群内身份)
+	want := map[string]bool{"query_metrics": true, "search_logs": true, "get_traces": true}
+	for tool := range observabilityTools {
+		if !want[tool] {
+			t.Errorf("%s 不应被归类为观测类工具", tool)
+		}
+	}
+	for tool := range want {
+		if !observabilityTools[tool] {
+			t.Errorf("%s 应归类为观测类工具", tool)
+		}
+	}
+	// K8s 类工具不得被误归类
+	for _, k8s := range []string{"get_workload_state", "get_kubernetes_events", "inspect_dependencies"} {
+		if observabilityTools[k8s] {
+			t.Errorf("%s 是 K8s 类工具,必须走集群 agent", k8s)
+		}
+	}
+}
+
+func TestInvokeObservabilityRejectsNonObsTool(t *testing.T) {
+	g := &Gateway{obs: &fakeObs{}}
+	if _, err := g.invokeObservability(context.Background(), "get_workload_state", nil, agentclient.Scope{}); err == nil {
+		t.Error("非观测类工具不应走直连路径")
 	}
 }

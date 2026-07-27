@@ -181,3 +181,12 @@ func TestKubeConformsToDataSourceViaLive(t *testing.T) {
 		t.Fatalf("Live.GetWorkloadState via fake: %v", err)
 	}
 }
+
+// liveScope 是 K8s 测试用的标准作用域(原先定义在已迁走的 live_http_test.go)。
+func liveScope() Scope {
+	return Scope{
+		ClusterID: "prod-cn-1",
+		Namespace: "payment",
+		Resource:  ResourceRef{Kind: "Deployment", Name: "checkout"},
+	}
+}

@@ -189,7 +189,22 @@ spec:
       ports:
         - protocol: TCP
           port: 9100
+    # 共享可观测后端(monitoring 命名空间):控制面直连 Prometheus 9090 /
+    # Loki 3100 / Tempo 3200。观测查询已从 cluster-agent 迁到控制面
+    # (control-plane/internal/obsquery),故该规则挂在控制面而非 agent。
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 3100
+        - protocol: TCP
+          port: 3200
     # 外部 HTTPS 443:企业 OIDC/JWKS 与外部 S3 兼容对象存储(排除私网,防 SSRF 内网横移)。
+    # 若观测后端为外部托管(Grafana Cloud / 自建域名),也走这条。
     # 生产 authMode=oidc + 外部 s3Endpoint 依赖此规则,否则 default-deny 会阻断鉴权与证据写入。
     - to:
         - ipBlock:
@@ -277,20 +292,8 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-    # 可观测后端(monitoring 命名空间):Prometheus 9090 / Loki 3100 / Tempo 3200+4317。
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-      ports:
-        - protocol: TCP
-          port: 9090
-        - protocol: TCP
-          port: 3100
-        - protocol: TCP
-          port: 3200
-        - protocol: TCP
-          port: 4317
+    # 注:可观测后端(Prometheus/Loki/Tempo)已改由**控制面直连**,
+    # cluster-agent 不再需要访问它们(见 control-plane-egress 中的 monitoring 规则)。
 ---
 # frontend 出站:仅需访问 control-plane 公共 API :8088(同命名空间反代)。
 apiVersion: networking.k8s.io/v1

@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 import "testing"
 

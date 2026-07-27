@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 // live_loki.go: read-only Loki HTTP API client.
 // Only GET /loki/api/v1/query_range is used.

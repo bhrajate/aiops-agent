@@ -28,6 +28,7 @@ import (
 	"github.com/aiops/control-plane/internal/gateway"
 	"github.com/aiops/control-plane/internal/incident"
 	"github.com/aiops/control-plane/internal/objstore"
+	"github.com/aiops/control-plane/internal/obsquery"
 	"github.com/aiops/control-plane/internal/outbox"
 	"github.com/aiops/control-plane/internal/store"
 	"github.com/aiops/control-plane/internal/telemetry"
@@ -154,28 +155,26 @@ func main() {
 		log.Info("cluster-agent single-cluster mode", "url", cfg.ClusterAgentURL, "mtls", cfg.AgentMTLSEnabled)
 	}
 
-	// ---- 中心 Observability Agent(查询共享 Prometheus/Loki/Tempo)----
-	// 观测后端是多集群共用的中心服务,不在任一集群内:凭据集中一份、
-	// 不进 ai-worker,查询仍经 Gateway 强制范围注入与审计。
-	var obsInvoker gateway.ToolInvoker
-	if cfg.ObservabilityAgentURL != "" {
-		if cfg.AgentMTLSEnabled {
-			oc, oerr := agentclient.NewMTLS(cfg.ObservabilityAgentURL, mtls)
-			if oerr != nil {
-				log.Error("observability agent mTLS init failed", "err", oerr)
-				os.Exit(1)
-			}
-			obsInvoker = oc
-		} else {
-			obsInvoker = agentclient.New(cfg.ObservabilityAgentURL)
+	// ---- 共享观测后端(控制面直连 Prometheus/Loki/Tempo)----
+	// 这些后端是多集群共用的中心服务,不在任一 K8s 集群内,因此不再绕经集群 agent:
+	// 少一跳网络、少一个必经故障点(故障时不会同时失去 metrics/logs/traces)、
+	// 凭据只此一份。查询仍在 Gateway 之后,范围注入/脱敏/审计/预算一律不变。
+	var obsClient gateway.ObsQuerier
+	if oc := obsquery.New(obsquery.ConfigFromEnv()); oc.Configured() {
+		obsClient = oc
+		log.Info("observability backends connected directly", "backends", oc.Backends(),
+			"cluster_label", cfg.ClusterLabel)
+		if cfg.ClusterLabel == "" {
+			log.Warn("AIOPS_CLUSTER_LABEL 未设置:共享后端下无法按集群隔离," +
+				"不同集群的同名 namespace 可能混淆")
 		}
-		log.Info("observability queries routed to central agent", "url", cfg.ObservabilityAgentURL)
 	} else {
-		log.Info("observability queries use per-cluster agents (no central observability agent configured)")
+		log.Warn("no observability backend configured (AIOPS_PROM_URL/LOKI_URL/TEMPO_URL); " +
+			"metrics/logs/traces tools will be denied")
 	}
 
 	// ---- 组件装配 ----
-	gw := gateway.New(st, agents, obsInvoker, rawStore, metrics, log)
+	gw := gateway.New(st, agents, obsClient, rawStore, metrics, log)
 	mgr := incident.New(st, cfg.CorrelationWindowSec, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
 		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)

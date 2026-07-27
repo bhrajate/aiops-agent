@@ -108,11 +108,11 @@ AIOPS_ROLES=all
 # 否则只按 namespace 过滤会读到其他集群同名 namespace)。常见:cluster / cluster_id /
 # k8s_cluster;Tempo 侧资源属性常为 k8s.cluster.name。为空=后端本集群专用,不强制。
 AIOPS_CLUSTER_LABEL=cluster
-# 中心 Observability Agent(查询共享 Prometheus/Loki/Tempo)。配置后观测类工具
-# (query_metrics/search_logs/get_traces)路由到此端点,不绕经集群 agent;
-# 该端点是一个 observability-only 模式的 cluster-agent(只配观测 URL + AIOPS_CLUSTER_LABEL,
-# 无 kubeconfig)。为空则观测类回退到集群 agent(每集群自带后端的拓扑)。
-AIOPS_OBSERVABILITY_AGENT_URL=http://obs-agent:9100
+# 共享可观测后端地址:由**控制面**直连(观测查询已从 cluster-agent 迁至控制面)。
+# 未配置则 query_metrics / search_logs / get_traces 被拒绝(denied)。
+AIOPS_PROM_URL=http://prometheus.observability.svc:9090
+AIOPS_LOKI_URL=http://loki.observability.svc:3100
+AIOPS_TEMPO_URL=http://tempo.observability.svc:3200
 AIOPS_CLUSTER_AGENT_URL=http://localhost:9100   # 单集群兼容(未配置下面的映射时生效)
 # 多集群:Tool Gateway 按 incident.cluster_id 路由到对应集群的 Agent。
 # 未在映射中的集群一律拒绝工具调用(no_agent_for_cluster),不回退到其他 Agent。

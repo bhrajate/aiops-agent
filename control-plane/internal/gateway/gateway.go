@@ -15,6 +15,7 @@ import (
 
 	"github.com/aiops/control-plane/internal/agentclient"
 	"github.com/aiops/control-plane/internal/model"
+	"github.com/aiops/control-plane/internal/obsquery"
 	"github.com/aiops/control-plane/internal/store"
 )
 
@@ -62,34 +63,63 @@ type ToolMetrics interface {
 	ObserveTool(tool, result string, seconds float64)
 }
 
-// ToolInvoker 抽象一个"能执行只读工具"的后端(cluster-agent 或中心 Observability Agent)。
-type ToolInvoker interface {
-	Invoke(ctx context.Context, tool string, args map[string]any, scope agentclient.Scope) (agentclient.ToolResult, error)
+// ObsQuerier 抽象共享观测后端的查询能力(由 internal/obsquery 实现)。
+// 控制面**直连**中心 Prometheus/Loki/Tempo,不经任何集群内 agent。
+type ObsQuerier interface {
+	QueryMetrics(ctx context.Context, scope obsquery.Scope, args map[string]any) (obsquery.Result, error)
+	SearchLogs(ctx context.Context, scope obsquery.Scope, args map[string]any) (obsquery.Result, error)
+	GetTraces(ctx context.Context, scope obsquery.Scope, args map[string]any) (obsquery.Result, error)
 }
 
 type Gateway struct {
 	store   *store.Store
 	agents  *agentclient.Registry // K8s 类工具:按 cluster_id 路由到该集群的 Agent
-	obs     ToolInvoker           // 观测类工具:中心 Observability Agent(可为 nil→回退到集群 agent)
+	obs     ObsQuerier            // 观测类工具:控制面直连共享后端(可为 nil→降级)
 	obj     RawSnapshotStore      // 可为 nil(降级:仅存摘要)
 	metrics ToolMetrics           // 可为 nil
 	log     *slog.Logger
 }
 
-func New(s *store.Store, agents *agentclient.Registry, obs ToolInvoker, obj RawSnapshotStore, metrics ToolMetrics, log *slog.Logger) *Gateway {
+func New(s *store.Store, agents *agentclient.Registry, obs ObsQuerier, obj RawSnapshotStore, metrics ToolMetrics, log *slog.Logger) *Gateway {
 	return &Gateway{store: s, agents: agents, obs: obs, obj: obj, metrics: metrics, log: log}
 }
 
-// invokerFor 按工具的数据源归属选择执行后端:
-//   - 观测类工具 + 已配置中心 Observability Agent → 中心 agent(不绕集群);
-//   - 其余(K8s 类)→ 按 incident 集群路由到该集群 agent。
-//
-// 未配置中心 agent 时,观测类工具回退到集群 agent(兼容"每集群自带后端"拓扑)。
-func (g *Gateway) invokerFor(tool, clusterID string) (ToolInvoker, error) {
-	if observabilityTools[tool] && g.obs != nil {
-		return g.obs, nil
+// invokeObservability 直连共享观测后端执行观测类工具。
+// scope 由 Gateway 注入(集群/命名空间/资源/时间窗);obsquery 内部再做
+// PromQL/LogQL 的 label 强制注入与跨范围拒绝——守卫随查询代码一起迁移过来。
+func (g *Gateway) invokeObservability(ctx context.Context, tool string, args map[string]any, sc agentclient.Scope) (agentclient.ToolResult, error) {
+	scope := obsquery.Scope{ClusterID: sc.ClusterID, Namespace: sc.Namespace}
+	if sc.Resource != nil {
+		kind, _ := sc.Resource["kind"].(string)
+		name, _ := sc.Resource["name"].(string)
+		uid, _ := sc.Resource["uid"].(string)
+		scope.Resource = obsquery.ResourceRef{Kind: kind, Name: name, UID: uid}
 	}
-	return g.agents.For(clusterID)
+	if sc.TimeRange != nil {
+		from, _ := sc.TimeRange["from"].(string)
+		to, _ := sc.TimeRange["to"].(string)
+		scope.TimeRange = &obsquery.TimeRange{From: from, To: to}
+	}
+
+	var res obsquery.Result
+	var err error
+	switch tool {
+	case "query_metrics":
+		res, err = g.obs.QueryMetrics(ctx, scope, args)
+	case "search_logs":
+		res, err = g.obs.SearchLogs(ctx, scope, args)
+	case "get_traces":
+		res, err = g.obs.GetTraces(ctx, scope, args)
+	default:
+		return agentclient.ToolResult{}, fmt.Errorf("not an observability tool: %s", tool)
+	}
+	if err != nil {
+		return agentclient.ToolResult{}, err
+	}
+	raw, _ := res.Raw.(map[string]any)
+	return agentclient.ToolResult{
+		Source: res.Source, Summary: res.Summary, Raw: raw, Freshness: res.Freshness,
+	}, nil
 }
 
 func (g *Gateway) observeTool(tool, result string, seconds float64) {
@@ -152,17 +182,26 @@ func (g *Gateway) Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, 
 		req.Arguments = map[string]any{}
 	}
 
-	// 5) 按数据源归属选择后端:观测类→中心 Observability Agent;K8s 类→该集群 agent。
-	//    K8s 类未配置对应集群 agent 则拒绝(绝不回退到别集群=跨集群越权)。
-	invoker, aerr := g.invokerFor(req.Tool, scope.ClusterID)
-	if aerr != nil {
-		g.deny(ctx, tenant, req, "no_agent_for_cluster")
-		return InvokeResult{Status: "denied", Reason: "no_agent_for_cluster"}, nil
-	}
-
-	// 调用只读数据源
+	// 5) 按数据源归属分派:
+	//    - 观测类(query_metrics/search_logs/get_traces):共享中心后端,控制面直连;
+	//    - K8s 类:必须集群内身份,按 incident 集群路由到该集群 agent;
+	//      未配置对应集群 agent 则拒绝(绝不回退到别集群=跨集群越权)。
 	start := time.Now()
-	res, err := invoker.Invoke(ctx, req.Tool, req.Arguments, scope)
+	var res agentclient.ToolResult
+	if observabilityTools[req.Tool] {
+		if g.obs == nil {
+			g.deny(ctx, tenant, req, "observability_backend_not_configured")
+			return InvokeResult{Status: "denied", Reason: "observability_backend_not_configured"}, nil
+		}
+		res, err = g.invokeObservability(ctx, req.Tool, req.Arguments, scope)
+	} else {
+		agent, aerr := g.agents.For(scope.ClusterID)
+		if aerr != nil {
+			g.deny(ctx, tenant, req, "no_agent_for_cluster")
+			return InvokeResult{Status: "denied", Reason: "no_agent_for_cluster"}, nil
+		}
+		res, err = agent.Invoke(ctx, req.Tool, req.Arguments, scope)
+	}
 	elapsed := time.Since(start)
 	if err != nil {
 		g.observeTool(req.Tool, "error", elapsed.Seconds())

@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 import (
 	"strings"
@@ -83,13 +83,13 @@ func TestScope_ClusterLabelEmpty_NotEnforced(t *testing.T) {
 
 func TestLiveClusterScope(t *testing.T) {
 	// clusterLabel 配置后,clusterScope 返回带该 label 名的约束
-	l := &Live{clusterLabel: "cluster"}
+	l := &Client{clusterLabel: "cluster"}
 	cs := l.clusterScope(Scope{ClusterID: "prod-cn-1"})
 	if cs.Name != "cluster" || cs.Value != "prod-cn-1" {
 		t.Errorf("clusterScope 错误: %+v", cs)
 	}
 	// 未配置则返回零值(不强制)
-	l2 := &Live{clusterLabel: ""}
+	l2 := &Client{clusterLabel: ""}
 	if (l2.clusterScope(Scope{ClusterID: "x"}) != ScopeLabel{}) {
 		t.Error("未配置 clusterLabel 应返回零值")
 	}

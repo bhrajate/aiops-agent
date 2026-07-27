@@ -1,4 +1,4 @@
-package datasource
+package obsquery
 
 // live_prometheus.go: read-only Prometheus HTTP API client.
 // Only GET /api/v1/query_range is used — no remote-write, admin or delete API.
