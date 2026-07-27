@@ -4,6 +4,7 @@ import { useIncident, useStartInvestigation } from '@/hooks/queries'
 import { useAuth } from '@/auth/context'
 import { SeverityBadge, StatusBadge } from '@/components/Badges'
 import { Card, CardHeader, Spinner, ErrorState, Button } from '@/components/ui'
+import { AlertGroupsPanel } from '@/components/AlertGroupsPanel'
 import { formatTime, formatBlastRadius } from '@/lib/format'
 import { HttpError } from '@/api/client'
 import type { Incident } from '@/api/types'
@@ -223,6 +224,11 @@ export function IncidentDetailPage() {
             )}
           </div>
         </Card>
+
+        {/* 两层聚合模型:该 Incident 下的告警去重单元明细 */}
+        <div className="lg:col-span-3">
+          <AlertGroupsPanel groups={inc.alert_groups ?? []} />
+        </div>
       </div>
     </div>
   )

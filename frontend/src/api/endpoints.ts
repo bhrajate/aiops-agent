@@ -55,7 +55,11 @@ export async function getIncident(id: string): Promise<Incident> {
   const investigations = Array.isArray(data.investigations)
     ? (data.investigations as Incident['investigations'])
     : incident.investigations
-  return { ...incident, investigations }
+  // 两层模型:alert_groups 与 incident 平级返回,合并进来供详情页展示
+  const alertGroups = Array.isArray(data.alert_groups)
+    ? (data.alert_groups as Incident['alert_groups'])
+    : incident.alert_groups
+  return { ...incident, investigations, alert_groups: alertGroups }
 }
 
 export function startInvestigation(

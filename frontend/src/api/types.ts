@@ -40,6 +40,23 @@ export interface Incident {
     phase?: InvestigationPhase
     trigger_reason?: string
   }>
+  // 两层聚合模型:该 Incident 下的告警去重单元(哪些资源/规则在告警)
+  alert_groups?: AlertGroup[]
+}
+
+// AlertGroup 是"去重单元":同资源+同规则的重复告警收敛为一条。
+// 一个 Incident(相关性单元)可包含多个 AlertGroup。
+export interface AlertGroup {
+  group_id: string
+  namespace: string
+  resource: ResourceRef
+  severity: Severity
+  fault_category: string
+  title: string
+  status: 'open' | 'resolved'
+  signal_count: number
+  first_seen: string
+  last_seen: string
 }
 
 // 调查阶段状态机(contracts.md / 文档 7.3)
