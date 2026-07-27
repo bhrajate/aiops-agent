@@ -180,6 +180,78 @@ func (s *Store) SecondsSinceLastInvestigation(ctx context.Context, incidentID st
 	return secs, true, nil
 }
 
+// BlastRadius 表示一次故障的影响面(文档 6.2 correlation)。
+type BlastRadius struct {
+	Services   int                 `json:"services"`   // 同 tenant/cluster/namespace 时间窗内活跃 incident 涉及的不同资源数
+	Namespaces int                 `json:"namespaces"` // 同 tenant/cluster 时间窗内活跃 incident 涉及的不同 namespace 数
+	Incidents  int                 `json:"incidents"`  // 关联的活跃 incident 数
+	Resources  []model.ResourceRef `json:"-"`          // 关联组内的资源(用于累积 affected_resources)
+}
+
+// ComputeCorrelatedBlastRadius 基于"关联层"计算影响面:
+// 同一 tenant/cluster 下,时间窗(windowSec)内仍活跃(open/acknowledged)的 incident,
+// 按 namespace 聚合。services = 同 namespace 内不同资源数;namespaces = 同 cluster 内不同 namespace 数。
+// 这是 grouping_key(单资源去重)之上的相关性聚合,使"影响面扩大"可被 policy 闸门捕获。
+// 注:纯时间+namespace 相关,不等于因果;拓扑关联为后续增强(文档 11.1)。
+func (s *Store) ComputeCorrelatedBlastRadius(ctx context.Context, tenant, cluster, namespace string, windowSec int) (BlastRadius, error) {
+	var br BlastRadius
+	// namespaces:同 cluster 时间窗内活跃 incident 的不同 namespace 数
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(DISTINCT (affected_resources->0->>'namespace'))
+		 FROM incidents
+		 WHERE tenant_id=$1 AND cluster_id=$2
+		   AND status IN ('open','acknowledged')
+		   AND last_seen > now() - ($3 || ' seconds')::interval`,
+		tenant, cluster, windowSec).Scan(&br.Namespaces)
+	if err != nil {
+		return br, err
+	}
+	// services + 关联 incident 数:同 namespace 内不同资源
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT
+		    affected_resources->0->>'kind'  AS kind,
+		    affected_resources->0->>'name'  AS name,
+		    affected_resources->0->>'namespace' AS ns
+		 FROM incidents
+		 WHERE tenant_id=$1 AND cluster_id=$2
+		   AND (affected_resources->0->>'namespace') = $3
+		   AND status IN ('open','acknowledged')
+		   AND last_seen > now() - ($4 || ' seconds')::interval`,
+		tenant, cluster, namespace, windowSec)
+	if err != nil {
+		return br, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind, name, ns string
+		if err := rows.Scan(&kind, &name, &ns); err != nil {
+			return br, err
+		}
+		br.Resources = append(br.Resources, model.ResourceRef{Kind: kind, Name: name, Namespace: ns})
+	}
+	if err := rows.Err(); err != nil {
+		return br, err
+	}
+	br.Services = len(br.Resources)
+	br.Incidents = br.Services
+	if br.Namespaces < 1 {
+		br.Namespaces = 1
+	}
+	if br.Services < 1 {
+		br.Services = 1
+	}
+	return br, nil
+}
+
+// SetIncidentBlastRadius 更新 incident 的 blast_radius 与 affected_resources(相关性聚合结果)。
+func (s *Store) SetIncidentBlastRadius(ctx context.Context, id string, br BlastRadius) error {
+	blast := map[string]any{"services": br.Services, "namespaces": br.Namespaces, "incidents": br.Incidents}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE incidents SET blast_radius=$1, updated_at=now() WHERE incident_id=$2`,
+		mustJSON(blast), id)
+	return err
+}
+
 // CountActiveInvestigations 返回某租户当前活跃(非终态)调查数,用于并发上限(文档 6.3)。
 func (s *Store) CountActiveInvestigations(ctx context.Context, tenant string) (int, error) {
 	var n int

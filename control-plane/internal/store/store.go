@@ -72,47 +72,70 @@ type OutboxRow struct {
 	Payload []byte
 }
 
-// FetchPendingOutbox 取一批待投递记录:pending,或 failed 但重试未超上限的(可重投)。
-// maxAttempts<=0 表示 failed 不重投(仅 pending)。
-func (s *Store) FetchPendingOutbox(ctx context.Context, limit, maxAttempts int) ([]OutboxRow, error) {
-	rows, err := s.pool.Query(ctx,
+// PublishFunc 将一条 outbox 记录发布到事件总线;返回 error 表示发布失败(将重试/进 dead)。
+type PublishFunc func(ctx context.Context, topic, key string, payload []byte) error
+
+// DrainOutbox 在单个事务内完成 取(加锁)→ 发布 → 标记,保证 FOR UPDATE SKIP LOCKED
+// 的行锁在整个批次期间持有 —— 多副本并发时同一行只会被一个副本处理(A1 修复)。
+// 返回本批处理的记录数。
+func (s *Store) DrainOutbox(ctx context.Context, limit, maxAttempts int, publish PublishFunc, log func(msg string, kv ...any)) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // 提交后 rollback 为 no-op
+
+	rows, err := tx.Query(ctx,
 		`SELECT id, topic, key, payload FROM outbox
 		 WHERE status='pending' OR (status='failed' AND attempts < $2)
-		 ORDER BY id LIMIT $1`, limit, maxAttempts)
+		 ORDER BY id LIMIT $1
+		 FOR UPDATE SKIP LOCKED`, limit, maxAttempts)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	var out []OutboxRow
+	var batch []OutboxRow
 	for rows.Next() {
 		var r OutboxRow
 		if err := rows.Scan(&r.ID, &r.Topic, &r.Key, &r.Payload); err != nil {
-			return nil, err
+			rows.Close()
+			return 0, err
 		}
-		out = append(out, r)
+		batch = append(batch, r)
 	}
-	return out, rows.Err()
-}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
 
-func (s *Store) MarkOutboxPublished(ctx context.Context, id int64) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE outbox SET status='published', published_at=now() WHERE id=$1`, id)
-	return err
-}
-
-// MarkOutboxFailed 递增 attempts 并置 failed,返回新的 attempts 值(供上限判断)。
-func (s *Store) MarkOutboxFailed(ctx context.Context, id int64) (int, error) {
-	var attempts int
-	err := s.pool.QueryRow(ctx,
-		`UPDATE outbox SET status='failed', attempts=attempts+1 WHERE id=$1 RETURNING attempts`, id).
-		Scan(&attempts)
-	return attempts, err
-}
-
-// MarkOutboxDead 将超过重试上限的记录标记为 dead(不再被 FetchPendingOutbox 取回)。
-func (s *Store) MarkOutboxDead(ctx context.Context, id int64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE outbox SET status='dead' WHERE id=$1`, id)
-	return err
+	for _, r := range batch {
+		if perr := publish(ctx, r.Topic, r.Key, r.Payload); perr != nil {
+			var attempts int
+			if e := tx.QueryRow(ctx,
+				`UPDATE outbox SET status='failed', attempts=attempts+1 WHERE id=$1 RETURNING attempts`, r.ID).
+				Scan(&attempts); e != nil {
+				return 0, e
+			}
+			if attempts >= maxAttempts {
+				if _, e := tx.Exec(ctx, `UPDATE outbox SET status='dead' WHERE id=$1`, r.ID); e != nil {
+					return 0, e
+				}
+				if log != nil {
+					log("outbox record dead after max attempts", "id", r.ID, "topic", r.Topic, "attempts", attempts, "err", perr)
+				}
+			} else if log != nil {
+				log("publish outbox failed (will retry)", "id", r.ID, "topic", r.Topic, "attempts", attempts, "err", perr)
+			}
+			continue
+		}
+		if _, e := tx.Exec(ctx,
+			`UPDATE outbox SET status='published', published_at=now() WHERE id=$1`, r.ID); e != nil {
+			return 0, e
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return len(batch), nil
 }
 
 // ---- 审计(文档 14.3) ----

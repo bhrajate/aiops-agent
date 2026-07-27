@@ -41,29 +41,10 @@ func (p *Publisher) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (p *Publisher) drain(ctx context.Context) {
-	// 取 pending 与"失败但未超重试上限"的记录(后者可重投,消除瞬时抖动导致的永久丢事件)。
-	rows, err := p.store.FetchPendingOutbox(ctx, 100, p.maxAttempts)
-	if err != nil {
-		p.log.Warn("fetch outbox failed", "err", err)
-		return
-	}
-	for _, r := range rows {
-		if err := p.pub.Publish(ctx, r.Topic, r.Key, r.Payload); err != nil {
-			// 递增 attempts;超上限则标记 dead(不再重投),并告警——防止毒记录无限重试。
-			attempts, mErr := p.store.MarkOutboxFailed(ctx, r.ID)
-			if mErr != nil {
-				p.log.Warn("mark failed err", "id", r.ID, "err", mErr)
-			}
-			if attempts >= p.maxAttempts {
-				_ = p.store.MarkOutboxDead(ctx, r.ID)
-				p.log.Error("outbox record dead after max attempts", "id", r.ID, "topic", r.Topic, "attempts", attempts, "err", err)
-			} else {
-				p.log.Warn("publish outbox failed (will retry)", "id", r.ID, "topic", r.Topic, "attempts", attempts, "err", err)
-			}
-			continue
-		}
-		if err := p.store.MarkOutboxPublished(ctx, r.ID); err != nil {
-			p.log.Warn("mark published failed", "id", r.ID, "err", err)
-		}
+	// 事务内 取(FOR UPDATE SKIP LOCKED)→ 发布 → 标记:多副本并发时同一行只由一个副本处理,
+	// 消除跨副本重复投递(A1);失败重试、超限进 dead 均在同事务内完成。
+	logf := func(msg string, kv ...any) { p.log.Warn(msg, kv...) }
+	if _, err := p.store.DrainOutbox(ctx, 100, p.maxAttempts, p.pub.Publish, logf); err != nil {
+		p.log.Warn("drain outbox failed", "err", err)
 	}
 }

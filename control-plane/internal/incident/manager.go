@@ -16,12 +16,16 @@ import (
 )
 
 type Manager struct {
-	store *store.Store
-	log   *slog.Logger
+	store                *store.Store
+	correlationWindowSec int
+	log                  *slog.Logger
 }
 
-func New(s *store.Store, log *slog.Logger) *Manager {
-	return &Manager{store: s, log: log}
+func New(s *store.Store, correlationWindowSec int, log *slog.Logger) *Manager {
+	if correlationWindowSec <= 0 {
+		correlationWindowSec = 900 // 默认 15 分钟相关窗口
+	}
+	return &Manager{store: s, correlationWindowSec: correlationWindowSec, log: log}
 }
 
 // HandleSignal 处理一条 signals 消息(bus.Handler 签名)。幂等。
@@ -59,6 +63,22 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 	}
 	if err := m.store.AttachSignalToIncident(ctx, sig.SignalID, agg.IncidentID); err != nil {
 		m.log.Warn("attach signal failed", "err", err)
+	}
+
+	// 相关性影响面(文档 6.2):在 grouping_key 单资源去重之上,按 tenant/cluster/namespace +
+	// 时间窗聚合活跃 incident,算出真实 services/namespaces,写回 incident 行。
+	// 这让"影响面扩大"能被 worker 的深度 RCA 闸门(policy.py: blast.services>1)捕获。
+	ns := ""
+	if len(agg.AffectedResources) > 0 {
+		ns = agg.AffectedResources[0].Namespace
+	}
+	if br, berr := m.store.ComputeCorrelatedBlastRadius(ctx, agg.TenantID, agg.ClusterID, ns, m.correlationWindowSec); berr != nil {
+		m.log.Warn("compute blast radius failed", "err", berr)
+	} else if err := m.store.SetIncidentBlastRadius(ctx, agg.IncidentID, br); err != nil {
+		m.log.Warn("set blast radius failed", "err", err)
+	} else if br.Services > 1 || br.Namespaces > 1 {
+		m.log.Info("blast radius expanded", "incident_id", agg.IncidentID,
+			"services", br.Services, "namespaces", br.Namespaces)
 	}
 	m.store.Audit(ctx, agg.TenantID, "system", "incident_upsert", "incident", agg.IncidentID, "ok",
 		map[string]any{"cluster": agg.ClusterID}, map[string]any{"created": created, "version": agg.Version})
