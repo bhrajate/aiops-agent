@@ -75,7 +75,11 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260615183401-62b3387ff324 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260610212136-7ab31c22f7ad // indirect
-	google.golang.org/grpc v1.81.1 // indirect
+	// 提升至已修补版本:v1.81.1 存在 GO-2026-6061(xDS RBAC 授权引擎 +
+	// HTTP/2 transport 服务端),govulncheck 判定为**已调用**——Temporal 的
+	// CheckHealth/Close 与 pgxpool 的 Close 都会走到受影响符号。v1.82.1 已修复。
+	// 由 Temporal SDK / pgx 间接引入,故显式提版;降级会让 CI 安全扫描再次失败。
+	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
