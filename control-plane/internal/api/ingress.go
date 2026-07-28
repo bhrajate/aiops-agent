@@ -160,12 +160,12 @@ func (i *Ingress) fromAlertmanager(raw map[string]json.RawMessage) []model.Signa
 			cluster = i.clusterID
 		}
 		sig := model.Signal{
-			Source:     "alertmanager",
-			SignalType: sigType,
-			ClusterID:  cluster,
-			Severity:   al.Labels["severity"],
+			Source:      "alertmanager",
+			SignalType:  sigType,
+			ClusterID:   cluster,
+			Severity:    al.Labels["severity"],
 			ResourceRef: resourceFromAlertLabels(al.Labels),
-			Labels: al.Labels,
+			Labels:      al.Labels,
 		}
 		if !al.StartsAt.IsZero() {
 			sig.StartsAt = &al.StartsAt
