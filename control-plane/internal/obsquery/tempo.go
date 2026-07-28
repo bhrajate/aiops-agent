@@ -1,7 +1,7 @@
 package obsquery
 
-// live_tempo.go: read-only Tempo HTTP API client.
-// Only GET /api/search is used (trace discovery). No ingest / delete API.
+// live_tempo.go:只读的 Tempo HTTP API 客户端。
+// 只使用 GET /api/search(链路发现),不涉及写入 / 删除 API。
 
 import (
 	"context"
@@ -18,7 +18,7 @@ type tempoClient struct {
 	hc   *http.Client
 }
 
-// tempoSearchResponse models Tempo's /api/search envelope.
+// tempoSearchResponse 建模 Tempo /api/search 的响应结构。
 type tempoSearchResponse struct {
 	Traces []struct {
 		TraceID           string `json:"traceID"`
@@ -34,9 +34,8 @@ func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]a
 	if strings.TrimSpace(svc) == "" {
 		svc = liveResource(scope)
 	}
-	// Isolation (parity with Prometheus/Loki): validate the caller-supplied
-	// service name and always constrain the search to the scope namespace so a
-	// caller cannot read other tenants' traces by overriding "service".
+	// 隔离(与 Prometheus/Loki 对齐):校验调用方传入的服务名,并始终把搜索约束在
+	// scope 指定的命名空间内,避免调用方通过覆写 "service" 读到其他租户的链路数据。
 	if err := validateDNS1123("service", svc); err != nil {
 		return Result{}, fmt.Errorf("get_traces scope: %w", err)
 	}
@@ -46,8 +45,8 @@ func (c *tempoClient) search(ctx context.Context, scope Scope, args map[string]a
 	}
 
 	q := url.Values{}
-	// Force the namespace tag; add service.name when known. url.Values.Encode
-	// escapes the values, and DNS-1123 validation above blocks tag-syntax breakout.
+	// 强制注入 namespace 标签;已知服务名时补上 service.name。url.Values.Encode
+	// 会转义取值,加上上面的 DNS-1123 校验,可阻断标签语法突破。
 	tags := "k8s.namespace.name=" + namespace
 	// 共享后端必须带集群维度 tag,否则跨集群串 trace。
 	if clusterScope.Name != "" {

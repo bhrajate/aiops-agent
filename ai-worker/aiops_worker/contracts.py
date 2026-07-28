@@ -1,14 +1,12 @@
-"""Frozen data contracts as Pydantic v2 models.
+"""以 Pydantic v2 模型表达的冻结数据契约。
 
-Mirrors shared/schemas/contracts.md (Signal / Incident / Investigation /
-Evidence / Hypothesis / DiagnosisResult) plus the worker-internal activity
-payloads. Every value that crosses the Model Gateway boundary is validated
-against these schemas -- this is the enforcement point for the
-"model output must pass schema validation" prompt-injection defense
-(architecture doc 14.2).
+对应 shared/schemas/contracts.md(Signal / Incident / Investigation /
+Evidence / Hypothesis / DiagnosisResult),外加 worker 内部的 activity 载荷。
+凡是跨越 Model Gateway 边界的取值都要按这些 schema 校验 —— 这里正是
+「模型输出必须通过 schema 校验」这一提示注入防线的落地点(架构文档 14.2)。
 
-Times are carried as ISO-8601 strings so JSON round-trips stay stable across
-the Go control plane and the Python worker (default Temporal JSON converter).
+时间统一用 ISO-8601 字符串承载,以保证 JSON 在 Go 控制面与 Python worker 之间
+往返时保持稳定(使用 Temporal 默认的 JSON 转换器)。
 """
 from __future__ import annotations
 
@@ -18,12 +16,12 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
-# Enumerations
+# 枚举
 # ---------------------------------------------------------------------------
 
 
 class Phase(str, Enum):
-    """Investigation phase state machine (contracts.md / architecture 7.3)."""
+    """调查阶段状态机(contracts.md / 架构 7.3)。"""
 
     QUEUED = "queued"
     TRIAGING = "triaging"
@@ -39,8 +37,8 @@ class Phase(str, Enum):
 
 
 class AnalyzerType(str, Enum):
-    """The five allowed analyzers (architecture 8.2). Fixed set -- the planner
-    may only choose from these; it cannot invent new analyzers."""
+    """五种允许的分析器(架构 8.2)。集合固定 —— 规划器只能从中挑选,
+    不能凭空造出新的分析器。"""
 
     KUBERNETES = "kubernetes"
     METRICS = "metrics"
@@ -49,7 +47,7 @@ class AnalyzerType(str, Enum):
     CHANGE = "change"
 
 
-# Fixed, allow-listed tool catalog (contracts.md / architecture 9.1).
+# 固定的工具白名单目录(contracts.md / 架构 9.1)。
 ALLOWED_TOOLS: frozenset[str] = frozenset(
     {
         "get_workload_state",
@@ -63,23 +61,22 @@ ALLOWED_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# Which argument keys each tool accepts from the planner. Anything else is
-# dropped by :func:`validate_plan` -- the planner may narrow *what* is asked,
-# never *where* it is asked (scope stays gateway-injected).
+# 各工具允许规划器传入的参数键。其余键会被 :func:`validate_plan` 丢弃 ——
+# 规划器可以收窄**查什么**,但绝不能改变**在哪里查**(scope 始终由网关注入)。
 #
-# Tools absent from this map take no planner arguments at all (the K8s tools are
-# purely scope-driven), so passing any is a plan violation.
+# 未出现在此映射中的工具完全不接受规划器参数(K8s 系工具纯粹由 scope 驱动),
+# 因此一旦传参即视为违反计划约束。
 TOOL_ARG_KEYS: dict[str, tuple[str, ...]] = {
-    "query_metrics": ("expr",),   # PromQL; gateway injects cluster/namespace at AST level
-    "search_logs": ("query",),    # LogQL; gateway injects stream selectors
-    "get_traces": ("service",),   # service.name tag; gateway forces namespace/cluster tags
+    "query_metrics": ("expr",),   # PromQL;网关在 AST 层注入 cluster/namespace
+    "search_logs": ("query",),    # LogQL;网关注入 stream 选择器
+    "get_traces": ("service",),   # service.name 标签;网关强制 namespace/cluster 标签
 }
 
-# Upper bound on a single planner-supplied argument value. A model that emits a
-# runaway expression must not turn into a runaway backend query string.
+# 单个规划器参数值的长度上限。模型若吐出失控的表达式,不能就此变成失控的
+# 后端查询串。
 MAX_TOOL_ARG_LEN = 512
 
-# Which tools each analyzer is permitted to invoke. Enforced in activities.
+# 各分析器分别允许调用哪些工具。在 activity 中强制执行。
 ANALYZER_TOOLS: dict[AnalyzerType, tuple[str, ...]] = {
     AnalyzerType.KUBERNETES: ("get_workload_state", "get_kubernetes_events"),
     AnalyzerType.METRICS: ("query_metrics",),
@@ -103,7 +100,7 @@ class DiagnosisStatus(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Core domain contracts
+# 核心领域契约
 # ---------------------------------------------------------------------------
 
 
@@ -146,9 +143,9 @@ class Incident(BaseModel):
 
 
 class Evidence(BaseModel):
-    """Immutable evidence record. ``type=knowledge`` marks *reference* knowledge
-    (runbooks) which may only seed hypotheses/queries, never prove a root cause
-    (architecture 12.2). Everything else is *real-time* evidence."""
+    """不可变的证据记录。``type=knowledge`` 标记的是**参考**知识(runbook),
+    它只能用于启发假设或查询,绝不能用来证明根因(架构 12.2)。
+    其余类型都属于**实时**证据。"""
 
     model_config = ConfigDict(extra="allow")
     evidence_id: str
@@ -182,7 +179,7 @@ class Hypothesis(BaseModel):
 
 
 class DiagnosisHypothesis(BaseModel):
-    """Slim hypothesis form embedded in a DiagnosisResult (contracts.md 10.6)."""
+    """嵌入 DiagnosisResult 的精简版假设结构(contracts.md 10.6)。"""
 
     model_config = ConfigDict(extra="allow")
     rank: int
@@ -200,12 +197,12 @@ class DiagnosisResult(BaseModel):
     hypotheses: list[DiagnosisHypothesis] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
-    # First version is read-only: remediation_proposal is ALWAYS null.
+    # 第一版是只读的:remediation_proposal **永远**为 null。
     remediation_proposal: None = None
 
 
 # ---------------------------------------------------------------------------
-# Bounded execution: budget + usage (architecture 8.4 / contracts.md)
+# 有界执行:预算与用量(架构 8.4 / contracts.md)
 # ---------------------------------------------------------------------------
 
 
@@ -223,8 +220,8 @@ class Usage(BaseModel):
     tokens: int = 0
     cost_usd: float = 0.0
     tool_calls: int = 0
-    # Count of SUPPORTED hypotheses deterministically downgraded for lacking
-    # real-time evidence. Not a budget dimension -- a quality signal.
+    # 因缺少实时证据而被确定性降级的 SUPPORTED 假设数量。
+    # 它不是预算维度,而是质量信号。
     ungrounded_downgrades: int = 0
 
     def add_model_usage(self, tokens: int, cost_usd: float) -> None:
@@ -232,11 +229,10 @@ class Usage(BaseModel):
         self.cost_usd += float(cost_usd)
 
     def budget_exceeded(self, budget: Budget) -> Optional[str]:
-        """Return the name of the first exhausted budget dimension, or None.
+        """返回第一个耗尽的预算维度名,均未耗尽则返回 None。
 
-        Deterministic: contains no randomness/clock reads. ``elapsed_sec`` is
-        supplied by the Workflow via ``workflow.now()`` so this stays
-        replay-safe.
+        确定性实现:不含随机数,也不读时钟。``elapsed_sec`` 由工作流通过
+        ``workflow.now()`` 提供,因此这里对重放是安全的。
         """
         if self.elapsed_sec >= budget.max_duration_sec:
             return "max_duration_sec"
@@ -252,15 +248,15 @@ class Usage(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Model Gateway usage envelope (returned alongside every model call)
+# Model Gateway 用量信封(随每次模型调用一并返回)
 # ---------------------------------------------------------------------------
 
 
 class ModelUsage(BaseModel):
-    """Token/cost accounting for a single model invocation (architecture 12.1).
+    """单次模型调用的 token / 成本核算(架构 12.1)。
 
-    MockProvider fills these with deterministic estimates so budget accounting
-    works end-to-end without a real model.
+    MockProvider 会用确定性的估算值填充这些字段,因此在没有真实模型的情况下,
+    预算核算也能端到端跑通。
     """
 
     provider: str = "mock"
@@ -275,7 +271,7 @@ class ModelUsage(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Triage + Plan (Planner constrained to allowed analyzers/tools)
+# 初判与计划(规划器被限制在允许的分析器/工具范围内)
 # ---------------------------------------------------------------------------
 
 
@@ -289,17 +285,16 @@ class TriageResult(BaseModel):
 
 
 class AnalyzerSpec(BaseModel):
-    """One analyzer step in a plan. ``tools`` must be a subset of that
-    analyzer's allow-listed tools (validated in :func:`validate_plan`).
+    """计划中的一个分析器步骤。``tools`` 必须是该分析器白名单工具的子集
+    (由 :func:`validate_plan` 校验)。
 
-    ``queries`` lets the planner *parameterize* a tool call (which PromQL to
-    evaluate, which LogQL to grep, which service to search traces for) instead
-    of always falling back to the gateway's generic default. Keys are tool
-    names; values are argument maps restricted to :data:`TOOL_ARG_KEYS`.
-    The Tool Gateway still owns scope: it force-injects cluster/namespace
-    matchers at the AST level and rejects cross-scope matchers, so a
-    parameterized query can narrow the question but never widen the blast
-    radius (architecture 9.2 / 14.2).
+    ``queries`` 允许规划器给工具调用**传参**(要评估哪条 PromQL、要 grep 哪条
+    LogQL、要检索哪个服务的链路),而不必总是退回网关的通用默认值。键为工具名,
+    值为受 :data:`TOOL_ARG_KEYS` 限制的参数映射。
+
+    scope 的所有权仍在 Tool Gateway:它在 AST 层强制注入 cluster/namespace
+    匹配器,并拒绝跨 scope 的匹配器,因此带参查询只能收窄问题,绝不会放大影响面
+    (架构 9.2 / 14.2)。
     """
 
     model_config = ConfigDict(extra="allow")
@@ -309,20 +304,20 @@ class AnalyzerSpec(BaseModel):
     queries: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def args_for(self, tool: str) -> dict[str, Any]:
-        """Validated arguments for ``tool`` (empty when unparameterized)."""
+        """返回 ``tool`` 已校验的参数(未传参时为空)。"""
         return dict(self.queries.get(tool) or {})
 
 
 class InvestigationPlan(BaseModel):
     model_config = ConfigDict(extra="allow")
     analyzers: list[AnalyzerSpec] = Field(default_factory=list)
-    # Reference runbooks to consult (retrieve_runbook). Reference knowledge only.
+    # 需要查阅的参考 runbook(retrieve_runbook)。仅作参考知识使用。
     runbook_queries: list[str] = Field(default_factory=list)
 
 
 class AnalyzerResult(BaseModel):
-    """Structured result from one analyzer run. Analyzers exchange only
-    structured state -- never free-form chat (architecture 8.2)."""
+    """单次分析器运行的结构化结果。分析器之间只交换结构化状态 ——
+    绝不传递自由格式的对话文本(架构 8.2)。"""
 
     model_config = ConfigDict(extra="allow")
     analyzer: AnalyzerType
@@ -344,7 +339,7 @@ class SynthesisResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Workflow input (docs/INTEGRATION.md start params) + incident context
+# 工作流入参(docs/INTEGRATION.md 中的启动参数)与故障上下文
 # ---------------------------------------------------------------------------
 
 
@@ -368,7 +363,7 @@ class IncidentContext(BaseModel):
 
 
 class WorkflowResult(BaseModel):
-    """Final workflow return payload."""
+    """工作流最终返回的载荷。"""
 
     model_config = ConfigDict(extra="allow")
     investigation_id: str
@@ -380,17 +375,15 @@ class WorkflowResult(BaseModel):
 
 
 def validate_plan(plan: InvestigationPlan) -> InvestigationPlan:
-    """Enforce that the planner only selected allowed analyzers/tools/arguments.
+    """强制规划器只能选用允许的分析器 / 工具 / 参数。
 
-    Guards against a compromised/hallucinated model trying to invoke tools
-    outside the allow list (architecture 9.2 / 14.2). Raises ValueError on
-    violation; callers treat that as a hard policy failure.
+    用于防范被攻陷或产生幻觉的模型调用白名单之外的工具(架构 9.2 / 14.2)。
+    违规时抛出 ValueError,调用方将其视为硬性策略失败。
 
-    Tool *arguments* are sanitized rather than rejected: an unknown/oversized
-    argument key is dropped so the call degrades to the gateway default instead
-    of failing the whole plan. A reference to an unknown tool -- or a tool the
-    analyzer may not use -- is still a hard error, because that signals the
-    model is trying to escape its grant rather than merely over-specifying.
+    工具**参数**采取净化而非拒绝的策略:未知或超长的参数键会被丢弃,使该次调用
+    退化为网关默认值,而不是让整份计划失败。但引用未知工具 —— 或引用该分析器无权
+    使用的工具 —— 仍是硬错误,因为这说明模型是在试图越出授权,而不只是把参数写得
+    过于具体。
     """
     for spec in plan.analyzers:
         allowed = set(ANALYZER_TOOLS.get(spec.analyzer, ()))
@@ -408,15 +401,15 @@ def validate_plan(plan: InvestigationPlan) -> InvestigationPlan:
 def _sanitize_queries(
     queries: dict[str, dict[str, Any]], tools: list[str]
 ) -> dict[str, dict[str, Any]]:
-    """Keep only argument maps for tools in this spec, with allow-listed keys,
-    string values, and bounded length. Everything else is dropped."""
+    """只保留本 spec 中工具对应的参数映射,且键必须在白名单内、值必须是字符串、
+    长度必须有界。其余一律丢弃。"""
     clean: dict[str, dict[str, Any]] = {}
     for tool, args in (queries or {}).items():
         if tool not in tools:
-            continue  # arguments for a tool this analyzer isn't running
+            continue  # 该分析器本轮并不运行这个工具,参数无效
         keys = TOOL_ARG_KEYS.get(tool)
         if not keys or not isinstance(args, dict):
-            continue  # tool takes no planner arguments (e.g. K8s tools)
+            continue  # 该工具不接受规划器参数(例如各 K8s 工具)
         kept: dict[str, Any] = {}
         for k in keys:
             v = args.get(k)

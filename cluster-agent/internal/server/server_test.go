@@ -78,7 +78,7 @@ func TestInvokeToolSuccess(t *testing.T) {
 }
 
 func TestInvokeScopeInjection(t *testing.T) {
-	// Omit cluster_id: the server must inject its configured default.
+	// 故意不带 cluster_id:服务端必须注入自己配置的默认值。
 	reqBody := `{"scope":{"namespace":"payment","resource":{"name":"checkout"}}}`
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/tools/get_workload_state", strings.NewReader(reqBody))
@@ -128,9 +128,9 @@ func TestInvokeBadJSON(t *testing.T) {
 	}
 }
 
-// TestMetricsUnknownToolLabel verifies that an unregistered tool name never
-// becomes a Prometheus label value (high-cardinality DoS guard): the /metrics
-// scrape must carry tool="unknown", not the attacker-supplied name.
+// TestMetricsUnknownToolLabel 验证未注册的工具名绝不会变成 Prometheus 标签值
+// (高基数 DoS 守卫):/metrics 抓取结果里必须是 tool="unknown",而不是攻击者
+// 传入的名字。
 func TestMetricsUnknownToolLabel(t *testing.T) {
 	reg := tools.NewRegistry(datasource.NewMock())
 	srv := New("prod-cn-1", reg, nil)
@@ -155,11 +155,11 @@ func TestMetricsUnknownToolLabel(t *testing.T) {
 	}
 }
 
-// TestInvokeBodyTooLarge verifies the request body is capped.
+// TestInvokeBodyTooLarge 验证请求体大小受到限制。
 func TestInvokeBodyTooLarge(t *testing.T) {
 	var b strings.Builder
 	b.WriteString(`{"arguments":{"expr":"`)
-	for i := 0; i < (2 << 20); i++ { // ~2 MiB, above the 1 MiB cap
+	for i := 0; i < (2 << 20); i++ { // 约 2 MiB,超过 1 MiB 上限
 		b.WriteByte('a')
 	}
 	b.WriteString(`"},"scope":{"namespace":"payment"}}`)

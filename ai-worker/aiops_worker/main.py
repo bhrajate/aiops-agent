@@ -1,8 +1,8 @@
-"""Worker entrypoint: connect to Temporal, register the workflow + activities,
-and run the ``investigation-ai`` task queue.
+"""Worker 入口:连接 Temporal,注册工作流与 Activity,并运行
+``investigation-ai`` 任务队列。
 
-Uses the Pydantic data converter so contract models serialize as JSON on the
-wire (cross-language compatible with the Go control plane).
+使用 Pydantic 数据转换器,使契约模型在传输时序列化为 JSON
+(与 Go 控制面跨语言兼容)。
 """
 from __future__ import annotations
 

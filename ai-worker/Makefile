@@ -6,7 +6,7 @@ export UV_INDEX_URL ?= https://mirrors.aliyun.com/pypi/simple/
 install:
 	$(UV) sync --extra dev
 
-# Install with the optional anthropic SDK too.
+# 连可选的 anthropic SDK 一起安装。
 install-anthropic:
 	$(UV) sync --extra dev --extra anthropic
 
@@ -16,16 +16,16 @@ run:
 test:
 	$(UV) run --extra dev pytest -q
 
-# Prove the workflow module imports cleanly (no syntax/import errors).
+# 验证 workflow 模块可以干净导入(无语法/导入错误)。
 check-import:
 	$(UV) run python -c "import aiops_worker.workflow; print('workflow import OK')"
 
-# Offline evaluation replay over the seed golden cases (no DB needed).
-# Add --from-db --write once AIOPS_DB_DSN is set to persist to evaluation_runs.
+# 在内置 seed 黄金用例上做离线评估重放(无需数据库)。
+# 配好 AIOPS_DB_DSN 后可加 --from-db --write,把结果持久化到 evaluation_runs。
 evaluate:
 	$(UV) run python -m aiops_worker.evaluation.run
 
-# Rebuild pgvector embeddings for knowledge_items (requires AIOPS_DB_DSN + db extra).
+# 重建 knowledge_items 的 pgvector embedding(需要 AIOPS_DB_DSN 与 db extra)。
 reindex:
 	$(UV) run python -m aiops_worker.knowledge.reindex --query "发布回归导致依赖超时"
 

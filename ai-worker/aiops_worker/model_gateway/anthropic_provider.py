@@ -1,12 +1,11 @@
-"""Anthropic (Claude) provider.
+"""Anthropic(Claude)provider。
 
-Talks to a real Claude model via the ``anthropic`` SDK. Output is FORCED
-through the Pydantic contracts: we ask the model for JSON only, parse it, and
-``model_validate`` it. Any schema violation raises -- an invalid model
-response is never allowed to flow downstream (architecture 14.2).
+通过 ``anthropic`` SDK 调用真实的 Claude 模型。输出会被**强制**过一遍 Pydantic
+契约:只要求模型返回 JSON,然后解析并 ``model_validate``。任何违反 schema 的情况
+都会抛错 —— 非法的模型响应绝不允许流向下游(架构 14.2)。
 
-The ``anthropic`` package is an optional dependency; this module is only
-imported when ``AIOPS_MODEL_PROVIDER=anthropic``.
+``anthropic`` 包是可选依赖;只有在 ``AIOPS_MODEL_PROVIDER=anthropic`` 时才会导入
+本模块。
 """
 from __future__ import annotations
 
@@ -61,11 +60,10 @@ def _tool_catalog_text() -> str:
 
 
 def _query_args_help() -> str:
-    """Tell the planner how to parameterize a tool call.
+    """告诉规划器该如何给工具调用传参。
 
-    Without this, the model omits ``queries`` and every observability tool falls
-    back to the gateway's generic default expression -- i.e. the plan's
-    ``objective`` would have no effect on what data is actually collected.
+    如果没有这段说明,模型会省略 ``queries``,于是所有可观测性工具都退回网关的
+    通用默认表达式 —— 也就是说计划里的 ``objective`` 对实际采集到的数据毫无影响。
     """
     return (
         "queries 用于**指定这次要查什么**(可选,按工具名给参数):\n"
@@ -83,7 +81,7 @@ class AnthropicProvider(ModelProvider):
     name = "anthropic"
 
     def __init__(self, api_key: str, model: str):
-        # Imported here so the dependency is only required at runtime.
+        # 在此处导入,使该依赖只在运行时才需要。
         import anthropic
 
         self._client = anthropic.AsyncAnthropic(api_key=api_key or None)
@@ -92,10 +90,10 @@ class AnthropicProvider(ModelProvider):
     async def _complete_raw(
         self, prompt: str, max_tokens: int = 2000
     ) -> tuple[str, bool, ModelUsage]:
-        """Call the model and return (text, truncated, usage).
+        """调用模型并返回 (text, truncated, usage)。
 
-        ``truncated`` is True when the model hit ``max_tokens`` -- a strong
-        signal the JSON body is incomplete, so callers must not trust a parse.
+        当模型触到 ``max_tokens`` 时 ``truncated`` 为 True —— 这强烈暗示 JSON 主体
+        不完整,因此调用方不应信任此时的解析结果。
         """
         resp = await self._client.messages.create(
             model=self._model,
@@ -103,9 +101,9 @@ class AnthropicProvider(ModelProvider):
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
         )
-        # Defensive extraction: a malformed SDK object (e.g. content=None) must
-        # not throw past _complete_validated's recovery path -> treat as empty
-        # text, which _parse turns into a clean error and the repair/fallback runs.
+        # 防御性提取:畸形的 SDK 对象(例如 content=None)不应把异常抛出到
+        # _complete_validated 的恢复路径之外 —— 这里视其为空文本,_parse 会将其
+        # 转成明确的错误,随后触发修复重问 / 兜底流程。
         content = getattr(resp, "content", None) or []
         try:
             text = "".join(
@@ -121,7 +119,7 @@ class AnthropicProvider(ModelProvider):
             model=self._model,
             input_tokens=getattr(resp.usage, "input_tokens", 0),
             output_tokens=getattr(resp.usage, "output_tokens", 0),
-            # Cost left as an estimate; wire real pricing at the gateway.
+            # 成本先按估算处理;真实定价在网关侧接入。
             cost_usd=round(
                 (getattr(resp.usage, "input_tokens", 0) * 15
                  + getattr(resp.usage, "output_tokens", 0) * 75)
@@ -143,10 +141,10 @@ class AnthropicProvider(ModelProvider):
 
     @staticmethod
     def _parse(text: str, truncated: bool) -> tuple[dict | None, str]:
-        """Parse a JSON object out of model text. Returns (data, error).
+        """从模型输出文本中解析出 JSON 对象,返回 (data, error)。
 
-        ``data`` is None on any failure; ``error`` explains why (for the repair
-        prompt + logs). Never raises.
+        任何失败情况下 ``data`` 均为 None,``error`` 说明失败原因(供修复提示词与
+        日志使用)。本函数不抛异常。
         """
         if truncated:
             return None, "response truncated at max_tokens (incomplete JSON)"
@@ -167,14 +165,13 @@ class AnthropicProvider(ModelProvider):
         capability: str,
         max_tokens: int = 2000,
     ) -> tuple[_T, ModelUsage]:
-        """Robust JSON->contract pipeline shared by every capability.
+        """各能力共用的健壮「JSON -> 契约」管线。
 
-        Flow: call model -> parse+validate. On JSONDecodeError / ValidationError
-        / truncation, do ONE "repair re-ask" that feeds the error back. If that
-        still fails, return a structured low-confidence fallback (built by
-        ``fallback``) so the Activity succeeds and the Workflow takes its
-        escalation path -- rather than raising, which would burn all 3 Temporal
-        retries deterministically and crash the investigation.
+        流程:调用模型 -> 解析并校验。遇到 JSONDecodeError / ValidationError /
+        输出被截断时,做**一次**「修复重问」,把错误信息回喂给模型。若仍失败,
+        则返回由 ``fallback`` 构造的结构化低置信度兜底结果,让 Activity 成功返回、
+        由工作流走升级路径 —— 而不是抛异常,那样会确定性地耗尽 Temporal 的 3 次重试
+        并让整次调查崩掉。
         """
         text, truncated, usage = await self._complete_raw(prompt, max_tokens)
         data, err = self._parse(text, truncated)
@@ -183,12 +180,12 @@ class AnthropicProvider(ModelProvider):
                 return build(data), usage
             except ValidationError as exc:
                 err = f"schema validation failed: {exc.errors()[:3]}"
-            except ValueError as exc:  # e.g. validate_plan allow-list violation
+            except ValueError as exc:  # 例如 validate_plan 检出白名单违规
                 err = f"policy validation failed: {exc}"
 
         logger.warning("anthropic %s parse failed, attempting repair: %s", capability, err)
 
-        # One repair attempt: restate the contract and the exact failure.
+        # 仅做一次修复尝试:重申契约,并给出确切的失败原因。
         repair_prompt = (
             f"{prompt}\n\n"
             "上一次的回复无法解析为要求的 JSON。错误原因:\n"
@@ -196,7 +193,7 @@ class AnthropicProvider(ModelProvider):
             "请只输出一个完整、合法的 JSON 对象,不要任何解释、不要 Markdown 围栏,"
             "确保所有括号闭合、字段类型正确。"
         )
-        # Give the repair more room so we don't truncate again.
+        # 给修复请求留更大的输出空间,避免再次被截断。
         text2, truncated2, usage2 = await self._complete_raw(
             repair_prompt, max_tokens=max(max_tokens, 4000)
         )
@@ -227,8 +224,8 @@ class AnthropicProvider(ModelProvider):
         )
 
         def _fallback() -> TriageResult:
-            # Conservative: recommend deep RCA so a parse failure never silently
-            # drops an incident; the deterministic policy gate still applies.
+            # 保守策略:建议走深度 RCA,这样解析失败绝不会悄悄漏掉一个故障;
+            # 确定性的策略闸门依然生效。
             return TriageResult(
                 summary="模型分诊结果无法解析,已回退为低置信度结论,建议进入深度 RCA / 人工确认。",
                 suspected_fault_category=None,
@@ -259,11 +256,11 @@ class AnthropicProvider(ModelProvider):
         )
 
         def _build(data: dict) -> InvestigationPlan:
-            # Schema validation + allow-list policy enforcement.
+            # schema 校验 + 白名单策略强制。
             return validate_plan(InvestigationPlan.model_validate(data))
 
         def _fallback() -> InvestigationPlan:
-            # Empty plan -> no evidence gathered -> workflow escalates to human.
+            # 空计划 -> 采集不到证据 -> 工作流升级给人工。
             return InvestigationPlan(analyzers=[], runbook_queries=[])
 
         return await self._complete_validated(
@@ -281,7 +278,7 @@ class AnthropicProvider(ModelProvider):
 
         def _build(data: dict) -> AnalyzerResult:
             result = AnalyzerResult.model_validate(data)
-            # Never let the model invent evidence ids.
+            # 绝不允许模型凭空编造证据 id。
             result.evidence_ids = [i for i in result.evidence_ids if i in valid_ids]
             return result
 
@@ -319,10 +316,9 @@ class AnthropicProvider(ModelProvider):
             return result
 
         def _fallback() -> SynthesisResult:
-            # One low-confidence UNRESOLVED hypothesis with NO missing_evidence,
-            # so has_supported_conclusion is False AND has_actionable_next_query
-            # is False -> the workflow escalates to a human immediately instead
-            # of looping supplemental rounds on garbage.
+            # 只给一条低置信度的 UNRESOLVED 假设,且**不带** missing_evidence,
+            # 于是 has_supported_conclusion 为 False,has_actionable_next_query
+            # 也为 False -> 工作流立即升级给人工,而不是拿垃圾输入反复跑补充轮次。
             return SynthesisResult(
                 hypotheses=[
                     Hypothesis(
@@ -344,10 +340,9 @@ class AnthropicProvider(ModelProvider):
 
 
 def _sanitize_analyzer_results(analyzer_results) -> list[dict]:
-    """Sanitize analyzer free-text (findings) before embedding in a prompt.
+    """把分析器的自由文本(findings)嵌入提示词之前先做净化。
 
-    Analyzer findings are derived from tool evidence (untrusted), so they are
-    treated as DATA too."""
+    分析器的 findings 源自工具证据(不可信),因此同样被当作**数据**对待。"""
     out: list[dict] = []
     for r in analyzer_results:
         d = json.loads(r.model_dump_json())
@@ -358,7 +353,7 @@ def _sanitize_analyzer_results(analyzer_results) -> list[dict]:
 
 
 def _strip_fences(text: str) -> str:
-    """Best-effort strip of accidental ```json fences around the JSON body."""
+    """尽力剥掉 JSON 主体外层可能误加的 ```json 围栏。"""
     t = text.strip()
     if t.startswith("```"):
         t = t.split("\n", 1)[1] if "\n" in t else t

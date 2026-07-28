@@ -1,14 +1,14 @@
-"""InvestigationWorkflow -- the RCA investigation state machine.
+"""InvestigationWorkflow —— RCA 调查状态机。
 
-Deterministic orchestration only (architecture 7.2/7.4). All I/O and model
-calls are Activities. Time comes from ``workflow.now()`` so replays are stable.
+只做确定性编排(架构 7.2/7.4)。所有 I/O 与模型调用都放在 Activity 中。时间统一取自
+``workflow.now()``,因此重放(replay)结果稳定。
 
-State machine (contracts.md / architecture 7.3):
+状态机(contracts.md / 架构 7.3):
   queued -> triaging -> (triage_published | planning) -> collecting ->
   synthesizing -> (concluded | needs_human) -> waiting_feedback -> closed
-  (+ cancelled from any active phase)
+  (任一活跃阶段均可转入 cancelled)
 
-Signals: IncidentUpdated, IncidentResolved, HumanFeedback, Cancel.
+信号:IncidentUpdated、IncidentResolved、HumanFeedback、Cancel。
 """
 from __future__ import annotations
 
@@ -49,36 +49,35 @@ with workflow.unsafe.imports_passed_through():
         WorkflowResult,
     )
 
-# Activity execution defaults: bounded time + limited retries (architecture 7.2).
+# Activity 执行的默认参数:有界超时 + 有限重试(架构 7.2)。
 _MODEL_TIMEOUT = timedelta(seconds=90)
 _IO_TIMEOUT = timedelta(seconds=30)
 _RETRY = RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=1))
-# Wall-clock safety net for the human-feedback wait: a WaitingFeedback
-# investigation must not block forever. On timeout it auto-closes (the business
-# DB remains the source of truth; humans can reopen). Complements the
-# recommended Temporal run_timeout set by the control plane at start.
+# 等待人工反馈的墙钟兜底:处于 WaitingFeedback 的调查不能永久阻塞。超时后自动关闭
+# (业务库仍是事实源,人工可以重新打开)。它与控制面启动时设置的推荐
+# Temporal run_timeout 互为补充。
 _FEEDBACK_TIMEOUT = timedelta(hours=48)
 
 
 def _clip_analyzers_to_budget(
     analyzers: list["AnalyzerSpec"], remaining: int
 ) -> list["AnalyzerSpec"]:
-    """Clip a round's analyzers so their total tool invocations fit ``remaining``
-    tool-call budget. Pure/deterministic: iterates analyzers in plan order and
-    counts only allow-listed tools (the same set the activity would invoke).
+    """裁剪本轮的分析器,使其工具调用总数不超过 ``remaining`` 的工具调用预算。
 
-    An analyzer that fully fits is kept as-is; the analyzer that straddles the
-    limit is kept with its tool list truncated; everything after is dropped.
-    This makes ``max_tool_calls`` an *ex-ante* barrier, not an after-the-fact
-    check between rounds.
+    纯函数且确定性:按计划顺序遍历分析器,只统计白名单内的工具(与 activity 实际会
+    调用的集合一致)。
+
+    完全放得下的分析器原样保留;正好跨越上限的那个分析器保留但截断其工具列表;
+    之后的全部丢弃。这样 ``max_tool_calls`` 就成了**事前**闸门,而不是轮次之间的
+    事后检查。
     """
     if remaining <= 0:
         return []
     clipped: list[AnalyzerSpec] = []
     used = 0
     for spec in analyzers:
-        # Only allow-listed tools actually cost a tool call (activities skip the
-        # rest); dedupe-preserving order to mirror the activity's behavior.
+        # 只有白名单内的工具才真正消耗一次工具调用(其余会被 activity 跳过);
+        # 保持顺序地去重,以与 activity 的行为保持一致。
         allowed = ANALYZER_TOOLS.get(spec.analyzer, ())
         effective = [t for t in spec.tools if t in allowed]
         if not effective:
@@ -86,8 +85,8 @@ def _clip_analyzers_to_budget(
         room = remaining - used
         if room <= 0:
             break
-        # Keep only the query args belonging to tools that survive clipping, so a
-        # clipped spec can't carry arguments for a tool it will never invoke.
+        # 只保留裁剪后仍存在的工具所对应的查询参数,避免被裁剪的 spec 里
+        # 残留永远不会被调用的工具的参数。
         if len(effective) <= room:
             kept = effective
             used += len(effective)
@@ -117,10 +116,10 @@ class InvestigationWorkflow:
         self._incident_resolved: bool = False
         self._feedback: Optional[dict[str, Any]] = None
         self._incident_version: int = 1
-        self._start_time = None  # set at run() start via workflow.now()
+        self._start_time = None  # 在 run() 开始时由 workflow.now() 赋值
         self._usage = Usage()
 
-    # -- signals -------------------------------------------------------------
+    # -- 信号 -----------------------------------------------------------------
 
     @workflow.signal(name="IncidentUpdated")
     def incident_updated(self, payload: dict[str, Any]) -> None:
@@ -138,7 +137,7 @@ class InvestigationWorkflow:
     def cancel(self, payload: dict[str, Any] | None = None) -> None:
         self._cancel_requested = True
 
-    # -- queries -------------------------------------------------------------
+    # -- 查询 -----------------------------------------------------------------
 
     @workflow.query(name="phase")
     def query_phase(self) -> str:
@@ -148,7 +147,7 @@ class InvestigationWorkflow:
     def query_usage(self) -> dict[str, Any]:
         return self._usage.model_dump(mode="json")
 
-    # -- helpers -------------------------------------------------------------
+    # -- 辅助方法 -------------------------------------------------------------
 
     def _refresh_elapsed(self) -> None:
         if self._start_time is not None:
@@ -157,7 +156,7 @@ class InvestigationWorkflow:
             ).total_seconds()
 
     async def _transition(self, inp: WorkflowInput, phase: Phase, event: str = "") -> None:
-        """Move to a new phase: update local state + persist phase + event."""
+        """切换到新阶段:更新本地状态,并持久化 phase 与事件。"""
         self._phase = phase
         await workflow.execute_activity_method(
             InvestigationActivities.record_phase,
@@ -198,7 +197,7 @@ class InvestigationWorkflow:
         )
 
     def _budget_stop(self, budget: Budget) -> Optional[str]:
-        """Return exhausted-budget reason, or None. Deterministic."""
+        """返回预算耗尽的原因,未耗尽则返回 None。确定性函数。"""
         self._refresh_elapsed()
         return self._usage.budget_exceeded(budget)
 
@@ -215,12 +214,12 @@ class InvestigationWorkflow:
             usage=self._usage,
         )
 
-    # -- main state machine --------------------------------------------------
+    # -- 主状态机 -------------------------------------------------------------
 
     @workflow.run
     async def run(self, raw_input: WorkflowInput) -> WorkflowResult:
-        # Temporal's Pydantic converter delivers a WorkflowInput; be defensive
-        # if a plain dict slips through (e.g. started by another SDK).
+        # Temporal 的 Pydantic 转换器会直接给出 WorkflowInput;这里做防御性处理,
+        # 以应对传入普通 dict 的情况(例如由其他 SDK 发起)。
         inp = (
             raw_input
             if isinstance(raw_input, WorkflowInput)
@@ -256,7 +255,7 @@ class InvestigationWorkflow:
         )
         await self._flush_usage(inp)
 
-        # Deterministic deep-RCA gate (NOT the LLM).
+        # 确定性的深度 RCA 闸门(**不是**交给 LLM 判断)。
         deep = await workflow.execute_activity_method(
             InvestigationActivities.evaluate_deep_rca_policy,
             DeepRCAInput(context=context, triage=triage_out.triage),
@@ -284,16 +283,14 @@ class InvestigationWorkflow:
         self._usage.add_model_usage(plan_out.usage.total_tokens, plan_out.usage.cost_usd)
         plan = plan_out.plan
 
-        # Bounded RCA loop (architecture 7.4 / 8.4).
+        # 有界的 RCA 循环(架构 7.4 / 8.4)。
         escalation_reason: Optional[str] = None
         last_synthesis: Optional[SynthesisResult] = None
         round_index = 0
 
-        # ``round_index`` counts COMPLETED collection rounds. With
-        # ``max_rounds=N`` the loop runs exactly N collection rounds (the round
-        # counter is advanced at the END of a round, so N=3 no longer silently
-        # runs only 2 rounds). The between-round budget check below is a
-        # backstop; the authoritative round guard is after the increment.
+        # ``round_index`` 统计**已完成**的采集轮数。在 ``max_rounds=N`` 时,循环恰好
+        # 跑 N 轮采集(轮次计数在一轮**结束**时才自增,因此 N=3 不会再悄悄只跑 2 轮)。
+        # 下面轮次之间的预算检查只是兜底;真正权威的轮数守卫在自增之后。
         while True:
             if self._should_cancel():
                 return await self._finish_cancelled(inp)
@@ -335,9 +332,8 @@ class InvestigationWorkflow:
                 syn_out.usage.total_tokens, syn_out.usage.cost_usd
             )
             last_synthesis = syn_out.synthesis
-            # An ungrounded "supported" claim is a model-quality signal, not an
-            # implementation detail: record it so reviewers can see the pipeline
-            # refused an unproven root cause instead of silently publishing it.
+            # 缺乏证据支撑却标为 "supported" 的结论属于模型质量信号,而非实现细节:
+            # 记录下来,让评审者看到流水线拒绝了未经证实的根因,而不是悄悄发布出去。
             if syn_out.ungrounded_downgraded:
                 self._usage.ungrounded_downgrades += len(syn_out.ungrounded_downgraded)
                 await self._emit(
@@ -350,7 +346,7 @@ class InvestigationWorkflow:
                     },
                 )
 
-            # This collection round is now complete -- account for it.
+            # 本轮采集至此完成 —— 计入轮数。
             round_index += 1
             self._usage.rounds = round_index
             await self._flush_usage(inp)
@@ -373,7 +369,7 @@ class InvestigationWorkflow:
                 escalation_reason = "budget_exhausted:max_rounds"
                 break
 
-            # synthesizing -> collecting (supplemental): rebuild the plan.
+            # synthesizing -> collecting(补充采集):重建调查计划。
             supp_out: PlanOutput = await workflow.execute_activity_method(
                 InvestigationActivities.build_supplemental_plan,
                 PlanInput(
@@ -389,10 +385,10 @@ class InvestigationWorkflow:
             )
             plan = supp_out.plan
 
-        # Escalate to human (insufficient evidence or budget exhausted).
+        # 升级给人工(证据不足或预算耗尽)。
         return await self._escalate(inp, context, last_synthesis, escalation_reason or "unknown")
 
-    # -- collection (parallel analyzers + runbooks) --------------------------
+    # -- 证据采集(并行分析器 + runbook) --------------------------------------
 
     async def _collect(
         self, inp: WorkflowInput, context: IncidentContext, plan, budget: Budget
@@ -401,9 +397,8 @@ class InvestigationWorkflow:
 
         all_evidence: list[Evidence] = []
 
-        # Reference knowledge (runbooks) first -- data only, never proof. Runbook
-        # lookups are tool calls too: clip them to the remaining budget and count
-        # them, so they cannot be used to bypass max_tool_calls (architecture 8.4).
+        # 先取参考知识(runbook)—— 它只是数据,绝不作为证明。runbook 检索同样算工具
+        # 调用:按剩余预算裁剪并计数,避免被用来绕过 max_tool_calls(架构 8.4)。
         runbook_budget = max(0, budget.max_tool_calls - self._usage.tool_calls)
         runbook_queries = plan.runbook_queries[:runbook_budget]
         if runbook_queries:
@@ -418,23 +413,21 @@ class InvestigationWorkflow:
                 start_to_close_timeout=_IO_TIMEOUT,
                 retry_policy=_RETRY,
             )
-            # Reference knowledge feeds the reasoning as data (architecture 12.2):
-            # merge into evidence (type=knowledge) instead of discarding it.
+            # 参考知识以数据形式参与推理(架构 12.2):合并进证据集
+            # (type=knowledge),而不是丢弃。
             all_evidence.extend(runbook_ev)
             self._usage.tool_calls += len(runbook_queries)
 
-        # Pre-emptive guardrail (architecture 8.4): clip this round's analyzers +
-        # per-analyzer tools to the *remaining* tool-call budget BEFORE dispatching
-        # anything, so a single round cannot blow past max_tool_calls. Deterministic
-        # -- depends only on the current usage and the (deterministic) plan order.
+        # 事前护栏(架构 8.4):在派发任何任务**之前**,就把本轮的分析器及各分析器的
+        # 工具裁剪到**剩余**的工具调用预算内,使单轮无法冲破 max_tool_calls。
+        # 该过程是确定性的 —— 只依赖当前用量与(确定性的)计划顺序。
         specs = _clip_analyzers_to_budget(
             plan.analyzers, remaining=budget.max_tool_calls - self._usage.tool_calls
         )
 
-        # Analyzers run in parallel (architecture 8.2). Each is its own
-        # activity; Temporal patches asyncio so asyncio.gather stays
-        # deterministic inside a workflow. The clipped tool count bounds the
-        # number of model calls, which in turn bounds per-round token/cost.
+        # 各分析器并行执行(架构 8.2)。每个分析器都是独立的 activity;Temporal 对
+        # asyncio 做了改写,因此 asyncio.gather 在工作流内部依然是确定性的。裁剪后的
+        # 工具数量给模型调用次数设了上限,进而限定了每轮的 token 与成本。
         futures = [
             workflow.execute_activity_method(
                 InvestigationActivities.run_analyzer,
@@ -462,7 +455,7 @@ class InvestigationWorkflow:
         await self._flush_usage(inp)
         return all_evidence, analyzer_results
 
-    # -- diagnosis + escalation ---------------------------------------------
+    # -- 诊断发布 + 升级 -----------------------------------------------------
 
     async def _do_publish_diagnosis(
         self, inp: WorkflowInput, context, synthesis, escalated: bool, phase: Phase
@@ -489,7 +482,7 @@ class InvestigationWorkflow:
         synthesis: Optional[SynthesisResult],
         reason: str,
     ) -> WorkflowResult:
-        # -> needs_human. Still publish the best-effort (unresolved) diagnosis.
+        # -> needs_human。即便如此,仍发布尽力而为的(unresolved)诊断结论。
         await self._transition(inp, Phase.NEEDS_HUMAN, "escalated")
         await self._emit(inp, "escalation", {"reason": reason})
         status = None
@@ -503,7 +496,7 @@ class InvestigationWorkflow:
         )
         return result
 
-    # -- waiting for feedback ------------------------------------------------
+    # -- 等待人工反馈 ---------------------------------------------------------
 
     async def _wait_for_feedback_or_close(
         self,
@@ -513,8 +506,8 @@ class InvestigationWorkflow:
     ) -> WorkflowResult:
         await self._transition(inp, Phase.WAITING_FEEDBACK, "waiting_feedback")
 
-        # Block until human feedback / cancel / incident resolved, but never
-        # forever: a bounded wait auto-closes on timeout (wall-clock safety net).
+        # 阻塞等待人工反馈 / 取消 / 故障被解决,但绝不无限等待:有界等待在超时后
+        # 自动关闭(墙钟兜底)。
         timed_out = False
         try:
             await workflow.wait_condition(
@@ -536,7 +529,7 @@ class InvestigationWorkflow:
                 final = Phase.CLOSED
         elif self._cancel_requested:
             final = Phase.CANCELLED
-        else:  # incident resolved externally
+        else:  # 故障已在外部被解决
             final = Phase.CLOSED
 
         await self._transition(inp, final, final.value)

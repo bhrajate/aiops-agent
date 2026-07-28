@@ -1,16 +1,14 @@
-"""Knowledge Service: pgvector semantic RAG (architecture 12.2).
+"""知识服务:基于 pgvector 的语义 RAG(架构 12.2)。
 
-The knowledge base holds *reference knowledge* (runbooks, architecture docs,
-service catalog, reviewed historical incidents, postmortems). Reference
-knowledge may only seed hypotheses / suggested queries -- it can never *prove* a
-root cause. That boundary is enforced upstream by evidence type
-(``type=knowledge``); this package only handles indexing + similarity search.
+知识库中存放的是**参考知识**(runbook、架构文档、服务目录、经评审的历史故障、
+复盘报告)。参考知识只能用于启发假设 / 建议查询方向 —— 永远不能用来**证明**根因。
+这条边界由上游按证据类型(``type=knowledge``)强制;本包只负责索引与相似度检索。
 
-Two pieces:
-- :mod:`aiops_worker.knowledge.embeddings` -- the ``EmbeddingProvider``
-  abstraction with a deterministic ``MockEmbeddingProvider`` (no API key).
-- :mod:`aiops_worker.knowledge.store` -- write/query ``knowledge_items``
-  embeddings via pgvector cosine distance (``embedding <=> query``).
+包含两部分:
+- :mod:`aiops_worker.knowledge.embeddings` —— ``EmbeddingProvider`` 抽象,
+  以及确定性的 ``MockEmbeddingProvider``(无需 API key)。
+- :mod:`aiops_worker.knowledge.store` —— 通过 pgvector 余弦距离
+  (``embedding <=> query``)读写 ``knowledge_items`` 的 embedding。
 """
 from __future__ import annotations
 

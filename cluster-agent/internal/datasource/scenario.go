@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Fault categories (aligned with 架构设计 §1 and contracts.md fault_category).
+// 故障类别(与架构设计 §1 及 contracts.md 的 fault_category 对齐)。
 const (
 	CatReleaseRegression = "release_regression"
 	CatPodCrashLoop      = "pod_crashloop"
@@ -13,33 +13,33 @@ const (
 	CatDependencyTimeout = "dependency_timeout"
 )
 
-// scenario is a deterministic, self-consistent fault story. Every tool derives
-// its output from the same scenario so the evidence forms one coherent chain.
+// scenario 是一个确定性且自洽的故障剧本。所有工具都从同一个 scenario 推导输出,
+// 因此产出的证据能串成一条前后一致的链条。
 type scenario struct {
-	category   string // one of the Cat* constants
-	service    string // workload / service name
-	kind       string // Kubernetes kind, e.g. Deployment
-	replicas   int    // desired replicas
-	oldVersion string // previous rollout version
-	newVersion string // current rollout version (regression carrier)
-	newPods    int    // pods already on the new version
-	image      string // container image (new version)
+	category   string // Cat* 常量之一
+	service    string // 工作负载 / 服务名
+	kind       string // Kubernetes 资源类型,例如 Deployment
+	replicas   int    // 期望副本数
+	oldVersion string // 上一个发布版本
+	newVersion string // 当前发布版本(引入回归的版本)
+	newPods    int    // 已切到新版本的 Pod 数
+	image      string // 容器镜像(新版本)
 
-	peakErr float64 // peak 5xx ratio on the affected surface
-	peakP99 int     // peak p99 latency ms
+	peakErr float64 // 受影响面的 5xx 峰值比例
+	peakP99 int     // p99 延迟峰值(毫秒)
 
-	dependency  string // downstream dependency (service or datastore)
-	depLatency  int    // observed dependency latency ms
+	dependency  string // 下游依赖(服务或数据存储)
+	depLatency  int    // 观测到的依赖延迟(毫秒)
 	changeKind  string // deploy | config | infra
-	changeDesc  string // human description of the triggering change
-	changeActor string // who made the change
+	changeDesc  string // 触发变更的人类可读描述
+	changeActor string // 变更执行者
 
 }
 
-// resolveScenario maps a scope to a deterministic scenario. The flagship
-// namespace=payment / resource=checkout reproduces the design doc's
-// release-regression -> dependency-timeout story. Other namespaces map to the
-// remaining three fault categories so the full taxonomy is demonstrable.
+// resolveScenario 把 scope 映射到确定性的 scenario。主线场景
+// namespace=payment / resource=checkout 复现设计文档中
+// 「发布回归 -> 依赖超时」的剧本。其他命名空间映射到剩余三类故障,
+// 以便完整演示故障分类体系。
 func resolveScenario(scope Scope) scenario {
 	ns := strings.ToLower(scope.Namespace)
 	res := strings.ToLower(scope.ResourceName())
@@ -142,5 +142,5 @@ func defaultResourceFor(ns string) string {
 	}
 }
 
-// pct renders a fraction as a percentage string, e.g. 0.082 -> "8.2%".
+// pct 把小数渲染为百分比字符串,例如 0.082 -> "8.2%"。
 func pct(f float64) string { return fmt.Sprintf("%.1f%%", f*100) }

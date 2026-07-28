@@ -1,4 +1,4 @@
-"""MockEmbeddingProvider: determinism, dimension, normalization, semantics."""
+"""MockEmbeddingProvider:确定性、维度、归一化与语义相关性。"""
 from __future__ import annotations
 
 import math
@@ -25,7 +25,7 @@ def test_deterministic_same_text_same_vector():
     p = MockEmbeddingProvider()
     v1 = p.embed("checkout 5xx error rate spike")
     v2 = p.embed("checkout 5xx error rate spike")
-    assert v1 == v2  # exact equality, no randomness/clock
+    assert v1 == v2  # 完全相等:不含随机数,也不读时钟
 
 
 def test_two_instances_agree():

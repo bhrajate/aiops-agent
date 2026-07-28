@@ -1,7 +1,7 @@
 package datasource
 
-// kubernetes_query.go: the read-only query methods used by Live's
-// Kubernetes-backed tools. Every method uses only Get/List.
+// kubernetes_query.go:Live 中基于 Kubernetes 的工具所使用的只读查询方法。
+// 所有方法只使用 Get/List。
 
 import (
 	"context"
@@ -15,11 +15,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// maxEventList bounds the Events().List page size so a namespace with a huge
-// event backlog cannot force the agent to buffer an unbounded response.
+// maxEventList 限制 Events().List 的分页大小,避免事件积压极多的命名空间迫使
+// agent 缓冲无界的响应。
 const maxEventList int64 = 500
 
-// workloadState reports Deployment / ReplicaSet / Pod health for the resource.
+// workloadState 报告该资源的 Deployment / ReplicaSet / Pod 健康状况。
 func (k *kubeReader) workloadState(ctx context.Context, scope Scope) (Result, error) {
 	namespace := ns(scope)
 	name := liveResource(scope)
@@ -83,7 +83,7 @@ func (k *kubeReader) workloadState(ctx context.Context, scope Scope) (Result, er
 	return Result{Source: "kubernetes", Summary: summary, Raw: raw, Freshness: "live"}, nil
 }
 
-// events returns recent Kubernetes events for the resource (or namespace).
+// events 返回该资源(或命名空间)近期的 Kubernetes 事件。
 func (k *kubeReader) events(ctx context.Context, scope Scope) (Result, error) {
 	namespace := ns(scope)
 	name := liveResource(scope)
@@ -97,9 +97,8 @@ func (k *kubeReader) events(ctx context.Context, scope Scope) (Result, error) {
 	warnings := 0
 	for i := range evList.Items {
 		e := &evList.Items[i]
-		// Match the target resource exactly, plus its child objects (Pods /
-		// ReplicaSets named "<resource>-..."), instead of a loose substring
-		// contains, which would also catch unrelated siblings.
+		// 精确匹配目标资源,外加其子对象(名为 "<resource>-..." 的 Pod /
+		// ReplicaSet),而不是用宽松的子串包含——那样会把无关的同级对象也捞进来。
 		if name != "" && !matchesResource(e.InvolvedObject.Name, name) {
 			continue
 		}
@@ -131,10 +130,9 @@ func (k *kubeReader) events(ctx context.Context, scope Scope) (Result, error) {
 	return Result{Source: "kubernetes", Summary: summary, Raw: raw, Freshness: "live"}, nil
 }
 
-// matchesResource reports whether an involvedObject name belongs to the target
-// resource: an exact match, or a child object named "<resource>-<suffix>"
-// (Pods / ReplicaSets under a Deployment). This replaces a loose substring
-// match, which would also catch unrelated siblings sharing a prefix.
+// matchesResource 判断 involvedObject 的名字是否属于目标资源:完全相同,或是名为
+// "<resource>-<后缀>" 的子对象(Deployment 下的 Pod / ReplicaSet)。它取代了宽松的
+// 子串匹配——后者会把共享前缀的无关同级对象也算进来。
 func matchesResource(objName, resource string) bool {
 	return objName == resource || strings.HasPrefix(objName, resource+"-")
 }

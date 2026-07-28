@@ -1,17 +1,17 @@
-"""Embedding providers for the Knowledge Service (architecture 12.2).
+"""知识服务使用的 embedding provider(架构 12.2)。
 
-The Model Gateway is not bound to a vendor, and neither is the embedding layer.
-``AIOPS_EMBEDDING_PROVIDER`` selects the implementation; ``mock`` is the default
-so indexing and semantic retrieval run end-to-end offline (tests / CI / demos).
+Model Gateway 不绑定具体厂商,embedding 层同样如此。
+``AIOPS_EMBEDDING_PROVIDER`` 选择具体实现;默认是 ``mock``,因此索引与语义检索
+都能完全离线端到端运行(测试 / CI / 演示)。
 
-Determinism contract (mirrors the MockProvider rules):
-- No randomness, no clock reads, no network, no API key.
-- The same text ALWAYS maps to the same 1536-d unit vector.
-- Similar text (shared tokens) maps to nearby vectors under cosine distance,
-  so ``ORDER BY embedding <=> query`` returns sensible neighbours.
+确定性契约(与 MockProvider 的规则一致):
+- 不含随机数,不读时钟,不走网络,不需要 API key。
+- 同一段文本**始终**映射到同一个 1536 维单位向量。
+- 相似文本(有共同 token)在余弦距离下映射到相近的向量,
+  因此 ``ORDER BY embedding <=> query`` 能返回合理的近邻。
 
-Vector dimension is 1536 to match ``knowledge_items.embedding vector(1536)`` in
-shared/sql/001_schema.sql.
+向量维度取 1536,以匹配 shared/sql/001_schema.sql 中的
+``knowledge_items.embedding vector(1536)``。
 """
 from __future__ import annotations
 
@@ -22,15 +22,15 @@ import re
 
 import numpy as np
 
-# Must match knowledge_items.embedding vector(1536).
+# 必须与 knowledge_items.embedding vector(1536) 保持一致。
 EMBEDDING_DIM = 1536
 
-# Tokeniser: ASCII words/numbers OR single CJK characters. Keeping CJK per-char
-# means Chinese runbooks (no whitespace) still yield overlapping tokens.
+# 分词器:匹配 ASCII 单词/数字,或单个中日韩字符。中日韩按单字切分意味着
+# 没有空格的中文 runbook 依然能产出可重叠的 token。
 _TOKEN_RE = re.compile(r"[a-z0-9]+|[一-鿿]")
 
-# Feature-hashing fan-out: each token contributes to this many dimensions.
-# >1 reduces collision noise so cosine similarity tracks token overlap well.
+# 特征哈希的扇出度:每个 token 会贡献到这么多个维度上。
+# 取值 >1 可降低哈希碰撞噪声,使余弦相似度更好地反映 token 重叠程度。
 _HASHES_PER_TOKEN = 4
 
 
@@ -39,11 +39,10 @@ def _tokenize(text: str) -> list[str]:
 
 
 class EmbeddingProvider(abc.ABC):
-    """Abstract embedding provider.
+    """抽象 embedding provider。
 
-    Implementations MUST return an ``EMBEDDING_DIM``-length list[float]. Batch
-    embedding defaults to a loop over :meth:`embed` but providers backed by a
-    real API should override it to batch network calls.
+    各实现**必须**返回长度为 ``EMBEDDING_DIM`` 的 list[float]。批量 embedding 默认
+    只是对 :meth:`embed` 做循环,但基于真实 API 的 provider 应重写它以合并网络调用。
     """
 
     name: str = "abstract"
@@ -58,11 +57,11 @@ class EmbeddingProvider(abc.ABC):
 
 
 class MockEmbeddingProvider(EmbeddingProvider):
-    """Deterministic, dependency-free embeddings via signed feature hashing.
+    """基于带符号特征哈希的确定性、零依赖 embedding。
 
-    Each token is hashed (SHA-256) into several (index, sign) slots of a
-    ``dim``-length vector. The vector is L2-normalised so dot product == cosine
-    similarity, which is what pgvector ``<=>`` (cosine distance) ranks on.
+    每个 token 经 SHA-256 哈希后落到 ``dim`` 维向量的若干个 (下标, 符号) 槽位上。
+    向量做 L2 归一化,于是点积即等于余弦相似度 —— 这正是 pgvector 的 ``<=>``
+    (余弦距离)排序所依据的量。
     """
 
     name = "mock"
@@ -76,8 +75,8 @@ class MockEmbeddingProvider(EmbeddingProvider):
         for tok in tokens:
             digest = hashlib.sha256(tok.encode("utf-8")).digest()
             for h in range(_HASHES_PER_TOKEN):
-                # 4 bytes -> dimension index, 1 byte -> sign. Distinct slices
-                # per hash keep the fan-out decorrelated.
+                # 4 字节 -> 维度下标,1 字节 -> 符号。每次哈希取不同的字节切片,
+                # 使扇出的各分量彼此不相关。
                 off = h * 5
                 idx = int.from_bytes(digest[off : off + 4], "big") % self.dim
                 sign = 1.0 if digest[off + 4] & 1 else -1.0
@@ -89,17 +88,17 @@ class MockEmbeddingProvider(EmbeddingProvider):
 
 
 class _StubEmbeddingProvider(EmbeddingProvider):
-    """Placeholder for a real hosted/local embedding model.
+    """真实托管 / 本地 embedding 模型的占位实现。
 
-    TODO: implement against Anthropic / OpenAI / a local model. Kept as an
-    explicit stub so ``build_embedding_provider`` can route to it once wired,
-    without pretending it works today.
+    TODO:对接 Anthropic / OpenAI / 本地模型。这里保留为显式的桩,使
+    ``build_embedding_provider`` 在真正接上之后可以直接路由过来,
+    同时不假装它现在已经可用。
     """
 
     def __init__(self, name: str):
         self.name = name
 
-    def embed(self, text: str) -> list[float]:  # pragma: no cover - stub
+    def embed(self, text: str) -> list[float]:  # pragma: no cover - 桩实现
         raise NotImplementedError(
             f"embedding provider {self.name!r} is not implemented yet; "
             "set AIOPS_EMBEDDING_PROVIDER=mock"
@@ -107,7 +106,7 @@ class _StubEmbeddingProvider(EmbeddingProvider):
 
 
 def build_embedding_provider(name: str | None = None) -> EmbeddingProvider:
-    """Factory. Reads ``AIOPS_EMBEDDING_PROVIDER`` (default ``mock``)."""
+    """工厂函数。读取 ``AIOPS_EMBEDDING_PROVIDER``(默认 ``mock``)。"""
     provider = (name or os.environ.get("AIOPS_EMBEDDING_PROVIDER", "mock")).lower()
     if provider == "mock":
         return MockEmbeddingProvider()
@@ -117,9 +116,8 @@ def build_embedding_provider(name: str | None = None) -> EmbeddingProvider:
 
 
 def to_pgvector_literal(vec: list[float]) -> str:
-    """Render a vector as a pgvector text literal: ``[0.1,0.2,...]``.
+    """把向量渲染成 pgvector 的文本字面量:``[0.1,0.2,...]``。
 
-    Used when the ``pgvector`` psycopg adapter is unavailable; pgvector accepts
-    this cast from text.
+    在 ``pgvector`` 的 psycopg 适配器不可用时使用;pgvector 支持从文本做此类型转换。
     """
     return "[" + ",".join(repr(float(x)) for x in vec) + "]"

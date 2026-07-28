@@ -1,5 +1,5 @@
-// Package tools maps the typed read-only tool names onto DataSource methods
-// and exposes their JSON-schema descriptors for the /tools endpoint.
+// Package tools 把强类型只读工具名映射到 DataSource 方法上,并为 /tools 端点
+// 暴露它们的 JSON Schema 描述。
 package tools
 
 import (
@@ -9,11 +9,11 @@ import (
 	"github.com/aiops/cluster-agent/internal/datasource"
 )
 
-// handler invokes one DataSource method.
+// handler 调用某一个 DataSource 方法。
 type handler func(ctx context.Context, ds datasource.DataSource, scope datasource.Scope, args map[string]any) (datasource.Result, error)
 
-// Tool describes a single typed tool: its name, human description, argument
-// JSON schema, and the DataSource-backed handler.
+// Tool 描述单个强类型工具:名称、可读描述、参数 JSON Schema,以及背后由
+// DataSource 支撑的 handler。
 type Tool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
@@ -21,14 +21,14 @@ type Tool struct {
 	handler     handler        `json:"-"`
 }
 
-// Registry holds the tool set bound to a DataSource.
+// Registry 保存绑定到某个 DataSource 的工具集合。
 type Registry struct {
 	ds    datasource.DataSource
 	tools map[string]Tool
 	order []string
 }
 
-// NewRegistry builds the full read-only tool set over ds.
+// NewRegistry 基于 ds 构建完整的只读工具集。
 func NewRegistry(ds datasource.DataSource) *Registry {
 	r := &Registry{ds: ds, tools: map[string]Tool{}}
 	for _, t := range defaultTools() {
@@ -38,7 +38,7 @@ func NewRegistry(ds datasource.DataSource) *Registry {
 	return r
 }
 
-// List returns the tools in stable declaration order (for /tools).
+// List 按稳定的声明顺序返回工具列表(供 /tools 使用)。
 func (r *Registry) List() []Tool {
 	out := make([]Tool, 0, len(r.order))
 	for _, name := range r.order {
@@ -47,19 +47,19 @@ func (r *Registry) List() []Tool {
 	return out
 }
 
-// Has reports whether name is a registered tool. Callers (e.g. the HTTP layer)
-// use it to keep unbounded, attacker-controlled names out of metric labels.
+// Has 判断 name 是否为已注册的工具。调用方(例如 HTTP 层)用它把无界的、
+// 由攻击者控制的名字挡在指标标签之外。
 func (r *Registry) Has(name string) bool {
 	_, ok := r.tools[name]
 	return ok
 }
 
-// ErrUnknownTool is returned when a tool name is not registered.
+// ErrUnknownTool 在工具名未注册时返回。
 type ErrUnknownTool struct{ Name string }
 
 func (e ErrUnknownTool) Error() string { return fmt.Sprintf("unknown tool: %q", e.Name) }
 
-// Invoke dispatches to the named tool, passing the injected scope through.
+// Invoke 分发到指定名字的工具,并把注入的 scope 透传下去。
 func (r *Registry) Invoke(ctx context.Context, name string, scope datasource.Scope, args map[string]any) (datasource.Result, error) {
 	t, ok := r.tools[name]
 	if !ok {

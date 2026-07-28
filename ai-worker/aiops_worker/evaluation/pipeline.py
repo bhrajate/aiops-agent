@@ -40,7 +40,7 @@ from ..policy import (
 
 @dataclass
 class ReplayOutcome:
-    """Everything one replay produced, for scoring."""
+    """一次重放产出的全部内容,用于后续打分。"""
 
     context: IncidentContext
     triage: TriageResult
@@ -51,7 +51,7 @@ class ReplayOutcome:
     diagnosis: Optional[DiagnosisResult] = None
     escalated: bool = False
     first_diag_sec: float = 0.0
-    # How many asserted root causes the evidence-first guard had to reject.
+    # 证据优先守卫不得不驳回的根因断言数量。
     ungrounded_downgraded: int = 0
 
     @property
@@ -62,8 +62,8 @@ class ReplayOutcome:
 def _offline_collect(
     case_id: str, spec: AnalyzerSpec, seq: int
 ) -> Evidence:
-    """Stand-in for the Tool Gateway: a deterministic real-time Evidence for
-    one analyzer step. content_hash is a stable function of the ids."""
+    """Tool Gateway 的替身:为单个分析器步骤产出确定性的实时 Evidence。
+    content_hash 是由各 id 计算出的稳定值。"""
     ev_id = f"ev-{case_id}-{spec.analyzer.value}-{seq}"
     type_map = {
         "kubernetes": "kubernetes",
@@ -85,12 +85,11 @@ def _offline_collect(
 
 
 class OfflineReplayPipeline:
-    """Runs a single golden-case replay end to end.
+    """端到端跑完单个黄金用例的重放。
 
-    Mirrors the workflow's bounded RCA loop: an initial plan+collect+synthesize
-    round, and if inconclusive but actionable, one supplemental round. Kept
-    deterministic (no randomness); the only clock read is a wall-clock latency
-    measurement, which does not affect the diagnosis.
+    与工作流的有界 RCA 循环保持一致:先做一轮「规划 + 采集 + 综合」,若结论不明确
+    但仍有可执行的下一步,则再跑一轮补充采集。整体保持确定性(不含随机数);
+    唯一的时钟读取用于测量墙钟耗时,不影响诊断结果。
     """
 
     def __init__(self, provider: Optional[ModelProvider] = None, max_rounds: int = 2):
@@ -108,8 +107,7 @@ class OfflineReplayPipeline:
         )
 
         if not deep:
-            # No deep RCA: triage-only. No diagnosis is published; treat as
-            # escalated/inconclusive for scoring purposes.
+            # 不做深度 RCA:仅初判。不发布诊断结论;打分时按「已升级 / 未定论」处理。
             outcome.escalated = True
             outcome.first_diag_sec = time.perf_counter() - start
             return outcome
@@ -122,7 +120,7 @@ class OfflineReplayPipeline:
         synthesis: Optional[SynthesisResult] = None
         round_index = 0
         while True:
-            # Runbooks (reference knowledge) then analyzers (real-time).
+            # 先取 runbook(参考知识),再跑分析器(实时证据)。
             for i, q in enumerate(plan.runbook_queries):
                 evidences.append(
                     Evidence(
@@ -140,9 +138,8 @@ class OfflineReplayPipeline:
             synthesis, _ = await self._provider.synthesize(
                 context, evidences, [], round_index
             )
-            # Replay the runtime evidence-first guard so offline scores reflect
-            # what production would actually publish (F2). Without this, an
-            # evaluation run could pass a gate the runtime would refuse.
+            # 在此重放运行时的证据优先守卫,使离线分数反映生产环境真正会发布的内容
+            # (F2)。否则一次评估可能通过闸门,而运行时其实会拒绝该结论。
             synthesis, downgraded = enforce_evidence_grounding(synthesis, evidences)
             outcome.ungrounded_downgraded += len(downgraded)
 

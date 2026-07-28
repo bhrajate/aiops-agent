@@ -1,12 +1,12 @@
-"""CLI: offline evaluation replay + metric report (architecture 18).
+"""CLI:离线评估重放 + 指标报告(架构 18)。
 
     python -m aiops_worker.evaluation.run [--from-db] [--write] [--json]
 
-Loads golden cases (seed fixtures by default, or ``golden_cases`` table with
-``--from-db``), replays each through the RCA pipeline, prints the quality-gate
-report, and optionally writes the run to ``evaluation_runs`` (``--write``).
+加载黄金用例(默认用内置 seed 数据,带 ``--from-db`` 时读 ``golden_cases`` 表),
+逐个经 RCA 流水线重放,打印质量闸门报告,并可选地把本次运行写入
+``evaluation_runs``(``--write``)。
 
-Runs fully offline with the default mock provider -- no Temporal, no network.
+使用默认的 mock provider 时完全离线运行 —— 不需要 Temporal,也不需要网络。
 """
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         if summary.run_id:
             print(f" evaluation_runs.run_id = {summary.run_id}")
 
-    # Exit non-zero if any release gate fails -> usable in CI.
+    # 任一发布闸门未通过则以非零码退出 -> 可直接用于 CI。
     gates = gate_report(summary)
     return 0 if all(gates.values()) else 1
 

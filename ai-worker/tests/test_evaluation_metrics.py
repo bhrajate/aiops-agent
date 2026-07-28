@@ -1,4 +1,4 @@
-"""Metric computation with constructed known inputs (no DB, no network)."""
+"""用已知的构造输入验证指标计算(不连数据库,不走网络)。"""
 from __future__ import annotations
 
 import pytest
@@ -79,7 +79,7 @@ def test_no_hit_when_keywords_absent():
 
 
 def test_citation_and_hallucination_counts():
-    # h1 supported WITH real-time evidence; h2 supported WITHOUT any -> halluc.
+    # h1 为 supported 且**有**实时证据;h2 为 supported 但**毫无**证据 -> 计入幻觉。
     hyps = [
         _hyp(1, "根因A 连接池", HypothesisStatus.SUPPORTED, ["e1"]),
         _hyp(2, "根因B 连接池", HypothesisStatus.SUPPORTED, ["missing"]),
@@ -92,8 +92,8 @@ def test_citation_and_hallucination_counts():
 
 
 def test_reference_knowledge_does_not_count_as_citation():
-    # Supported hypothesis cites only a knowledge evidence id -> hallucination,
-    # because reference knowledge can never *prove* a root cause (arch 12.2).
+    # supported 假设只引用了 knowledge 类证据 id -> 计入幻觉,
+    # 因为参考知识永远不能**证明**根因(架构 12.2)。
     hyps = [_hyp(1, "连接池根因", HypothesisStatus.SUPPORTED, ["kb1"])]
     out = _outcome(hyps, [_ev("kb1", "knowledge")])
     r = score_outcome("c5", "release_regression", ["连接池"], out)
@@ -131,14 +131,14 @@ def test_aggregate_no_supported_is_not_hallucination():
                          unsupported_root_causes=0, first_diag_sec=0.1),
     ]
     s = aggregate(results)
-    # Vacuous: no asserted root cause -> 100% cited, 0% hallucination.
+    # 空集情形:没有任何被断言的根因 -> 引用率记 100%,幻觉率记 0%。
     assert s.evidence_citation_rate == 1.0
     assert s.hallucination_rate == 0.0
 
 
 def test_hallucination_gate_fails_over_threshold():
     results = []
-    # 20 supported, 2 unsupported -> 10% hallucination > 5% gate.
+    # 20 条有支撑、2 条无支撑 -> 幻觉率 10%,超过 5% 的闸门阈值。
     for i in range(18):
         results.append(EvaluationResult(
             case_id=f"ok{i}", fault_category="x", diagnosis_status="resolved",

@@ -86,7 +86,7 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-  # ---------------------------------------------------------------- Security scanning
+  # ---------------------------------------------------------------- 安全扫描
   security:
     name: dependency vulnerability scan
     runs-on: ubuntu-latest
@@ -129,7 +129,7 @@ jobs:
           uv sync --extra dev
           uv run --with pip-audit pip-audit
 
-  # ---------------------------------------------------------------- Deploy artifacts lint
+  # ---------------------------------------------------------------- 部署产物校验
   deploy-lint:
     name: deploy manifests + helm lint
     runs-on: ubuntu-latest
@@ -154,7 +154,7 @@ jobs:
             -f deploy/helm/aiops/values-prod.yaml \
             | /tmp/kubeconform -strict -ignore-missing-schemas -summary -
 
-  # ---------------------------------------------------------------- Optional DB-backed tests
+  # ---------------------------------------------------------------- 可选的依赖数据库测试
   db-tests:
     name: control-plane DB tests (postgres)
     runs-on: ubuntu-latest
@@ -195,7 +195,7 @@ jobs:
         # 显式跑 DB/集成用例(依赖上面的 Postgres service);失败即失败,不回退掩盖。
         run: go test -count=1 ./... -run 'DB|Integration'
 
-  # ---------------------------------------------------------------- Docker images
+  # ---------------------------------------------------------------- Docker 镜像
   docker:
     name: docker build (${{ matrix.component }})
     runs-on: ubuntu-latest

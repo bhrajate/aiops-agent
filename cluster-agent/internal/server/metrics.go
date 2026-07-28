@@ -7,10 +7,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// metrics holds cluster-agent Prometheus counters (arch §16).
+// metrics 保存 cluster-agent 的 Prometheus 计数器(架构 §16)。
 type metrics struct {
-	toolCalls   *prometheus.CounterVec   // by tool, status
-	toolLatency *prometheus.HistogramVec // by tool
+	toolCalls   *prometheus.CounterVec   // 按 tool、status 维度
+	toolLatency *prometheus.HistogramVec // 按 tool 维度
 	reg         *prometheus.Registry
 }
 

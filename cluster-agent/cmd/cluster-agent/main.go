@@ -1,7 +1,7 @@
-// Command cluster-agent runs the per-cluster, read-only Cluster Agent.
+// Command cluster-agent 运行按集群部署的只读 Cluster Agent。
 //
-// It exposes typed read-only tools (see docs/INTEGRATION.md) on :9100 for the
-// Tool Gateway to proxy. It never mutates cluster state.
+// 它在 :9100 上暴露强类型只读工具(见 docs/INTEGRATION.md)供 Tool Gateway 代理调用,
+// 绝不变更集群状态。
 package main
 
 import (
@@ -25,9 +25,9 @@ func main() {
 	addr := env("AIOPS_CLUSTER_AGENT_ADDR", ":9100")
 	clusterID := env("AIOPS_CLUSTER_ID", "prod-cn-1")
 
-	// Pluggable read-only data source. AIOPS_DATASOURCE selects mock (default)
-	// or live (client-go / Prometheus / Loki / Tempo). Live degrades per-tool
-	// when an upstream URL or the Kubernetes client is not configured.
+	// 可插拔的只读数据源。AIOPS_DATASOURCE 选择 mock(默认)或 live
+	// (client-go / Prometheus / Loki / Tempo)。live 模式下若上游 URL 或
+	// Kubernetes 客户端未配置,则按工具粒度降级。
 	ds, mode := datasource.FromEnv()
 	reg := tools.NewRegistry(ds)
 	srv := server.New(clusterID, reg, log)
@@ -46,15 +46,15 @@ func main() {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
-		// Bound request headers so an oversized header set cannot exhaust
-		// memory before routing (request bodies are capped in handleInvoke).
+		// 限制请求头大小,避免超大头部在路由之前就耗尽内存
+		// (请求体的上限在 handleInvoke 中控制)。
 		MaxHeaderBytes: 1 << 20, // 1 MiB
 	}
 
-	// Dedicated plain-HTTP health endpoint on a separate port. When the tools
-	// port runs mTLS (RequireAndVerifyClientCert), kubelet cannot present a
-	// client cert, so an HTTPS probe against :9100 would always fail. The health
-	// port exposes only /healthz (no tools, no cluster data) for liveness/readiness.
+	// 独立端口上的专用明文 HTTP 健康检查端点。当工具端口启用 mTLS
+	// (RequireAndVerifyClientCert)时,kubelet 无法提供客户端证书,对 :9100 的
+	// HTTPS 探针必然失败。健康端口只暴露 /healthz(不含工具、不含集群数据),
+	// 供存活/就绪探针使用。
 	healthAddr := env("AIOPS_CLUSTER_AGENT_HEALTH_ADDR", ":9101")
 	healthMux := http.NewServeMux()
 	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -75,7 +75,7 @@ func main() {
 			"datasource", mode, "mode", "read-only", "mtls", tlsEnabled)
 		var serveErr error
 		if tlsEnabled {
-			// Certs/keys already loaded into TLSConfig; pass empty paths.
+			// 证书与私钥已加载进 TLSConfig,这里传空路径即可。
 			serveErr = httpSrv.ListenAndServeTLS("", "")
 		} else {
 			serveErr = httpSrv.ListenAndServe()

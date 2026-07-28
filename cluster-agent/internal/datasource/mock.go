@@ -6,24 +6,21 @@ import (
 	"time"
 )
 
-// Mock is a deterministic, read-only DataSource. Given the same scope it always
-// returns the same self-consistent evidence, so tests are reproducible and the
-// tools together narrate one coherent fault story.
+// Mock 是确定性的只读 DataSource。给定相同的 scope 总是返回相同且自洽的证据,
+// 因此测试可复现,各工具合起来也能讲出一个前后一致的故障故事。
 //
-// It performs no I/O and never touches a real cluster.
+// 它不做任何 I/O,也绝不接触真实集群。
 type Mock struct {
-	// now anchors relative timestamps; defaults to a fixed instant for
-	// reproducibility when zero.
+	// now 是相对时间戳的锚点;为零值时取一个固定时刻以保证可复现。
 	now time.Time
 }
 
-// NewMock returns a Mock anchored at a fixed, reproducible instant.
+// NewMock 返回锚定在固定、可复现时刻上的 Mock。
 func NewMock() *Mock {
 	return &Mock{now: time.Date(2026, 7, 26, 10, 5, 0, 0, time.UTC)}
 }
 
-// anchor returns the scenario "current time". If the scope carries a time
-// range end, it is used; otherwise the fixed anchor is used.
+// anchor 返回剧本中的「当前时间」。若 scope 带有时间窗末端则用它,否则用固定锚点。
 func (m *Mock) anchor(scope Scope) time.Time {
 	if scope.TimeRange != nil && scope.TimeRange.To != "" {
 		if t, err := time.Parse(time.RFC3339, scope.TimeRange.To); err == nil {
@@ -40,7 +37,7 @@ func (m *Mock) ts(scope Scope, offset time.Duration) string {
 	return m.anchor(scope).Add(offset).Format(time.RFC3339)
 }
 
-// ns returns the effective namespace, defaulting to "default".
+// ns 返回生效的命名空间,缺省为 "default"。
 func ns(scope Scope) string {
 	if scope.Namespace == "" {
 		return "default"

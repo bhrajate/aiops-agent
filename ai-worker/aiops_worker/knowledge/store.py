@@ -1,14 +1,12 @@
-"""pgvector-backed knowledge index + semantic retrieval.
+"""基于 pgvector 的知识索引与语义检索。
 
-Writes ``knowledge_items.embedding`` and queries by cosine distance
-(``ORDER BY embedding <=> query``). ``psycopg`` (v3) is an optional dependency
-(the ``db`` extra); importing this module never requires it -- the connection
-is only opened when a store method runs.
+写入 ``knowledge_items.embedding``,并按余弦距离查询
+(``ORDER BY embedding <=> query``)。``psycopg``(v3)是可选依赖(``db`` extra);
+导入本模块时并不需要它 —— 只有真正执行 store 方法时才会建立连接。
 
-The AI *worker* in production reaches knowledge via ``retrieve_runbook`` through
-the control-plane internal API. This module is the offline/admin path used by
-the ``reindex`` CLI and by control-plane-side indexing, and it is what proves
-the pgvector retrieval works end-to-end.
+生产环境中 AI **worker** 是通过控制面内部 API 的 ``retrieve_runbook`` 获取知识。
+本模块是供 ``reindex`` CLI 与控制面侧索引使用的离线/运维路径,
+同时也是证明 pgvector 检索端到端可用的地方。
 """
 from __future__ import annotations
 
@@ -23,8 +21,8 @@ DEFAULT_DSN_ENV = "AIOPS_DB_DSN"
 
 @dataclass(frozen=True)
 class KnowledgeHit:
-    """One semantic-search result. ``distance`` is cosine distance in [0,2];
-    ``score = 1 - distance`` is cosine similarity for convenience."""
+    """一条语义检索结果。``distance`` 是取值区间 [0,2] 的余弦距离;
+    ``score = 1 - distance`` 即余弦相似度,便于直接使用。"""
 
     knowledge_id: str
     kind: str
@@ -38,15 +36,15 @@ class KnowledgeHit:
 
 
 def _normalize_dsn(dsn: str) -> str:
-    """psycopg does not understand ``?sslmode=disable`` on all URL forms the
-    same way libpq does, but it does accept standard libpq URIs. The DSN in
-    docs/INTEGRATION.md is a libpq URI, so pass it through unchanged."""
+    """psycopg 对 ``?sslmode=disable`` 在各种 URL 形式下的理解方式与 libpq 并不完全
+    一致,但它接受标准的 libpq URI。docs/INTEGRATION.md 中给出的 DSN 就是 libpq URI,
+    因此原样透传即可。"""
     return dsn
 
 
 class KnowledgeStore:
-    """Synchronous pgvector store. Kept sync (psycopg default) because the
-    reindex path is a CLI/admin job, not a hot request path."""
+    """同步的 pgvector 存储层。之所以保持同步(psycopg 的默认模式),是因为 reindex
+    属于 CLI / 运维作业,并不在高频请求路径上。"""
 
     def __init__(self, provider: EmbeddingProvider, dsn: Optional[str] = None):
         self._provider = provider
@@ -62,8 +60,8 @@ class KnowledgeStore:
 
     def _connect(self):
         try:
-            import psycopg  # noqa: WPS433 (lazy: optional dependency)
-        except ImportError as exc:  # pragma: no cover - env guard
+            import psycopg  # noqa: WPS433 (惰性导入:可选依赖)
+        except ImportError as exc:  # pragma: no cover - 环境守卫
             raise RuntimeError(
                 "psycopg is required for KnowledgeStore; install the 'db' extra: "
                 "uv sync --extra db"
@@ -73,10 +71,10 @@ class KnowledgeStore:
     # -- indexing ------------------------------------------------------------
 
     def reindex_all(self, tenant_id: Optional[str] = None) -> int:
-        """(Re)compute embeddings for all knowledge_items and UPDATE the column.
+        """为所有 knowledge_items 重新计算 embedding 并 UPDATE 该列。
 
-        Embeds ``title + '\\n' + content`` so titles carry weight. Returns the
-        number of rows updated. Idempotent: safe to run repeatedly.
+        对 ``title + '\\n' + content`` 做 embedding,使标题也占一定权重。返回被更新的
+        行数。该操作幂等:可以反复执行。
         """
         rows = self._load_items(tenant_id)
         if not rows:
@@ -116,8 +114,8 @@ class KnowledgeStore:
         kind: Optional[str] = None,
         tenant_id: Optional[str] = None,
     ) -> list[KnowledgeHit]:
-        """Semantic search by cosine distance. Only rows with an embedding are
-        considered; rows without one must be reindexed first."""
+        """按余弦距离做语义检索。只考虑已有 embedding 的行;没有 embedding 的行
+        必须先重建索引。"""
         qvec = to_pgvector_literal(self._provider.embed(query))
         sql = (
             "SELECT knowledge_id, kind, title, content, "
@@ -151,7 +149,7 @@ class KnowledgeStore:
         return out
 
     def count_indexed(self, tenant_id: Optional[str] = None) -> tuple[int, int]:
-        """Return (total_items, items_with_embedding)."""
+        """返回 (总条目数, 已有 embedding 的条目数)。"""
         sql = (
             "SELECT count(*), count(embedding) FROM knowledge_items"
         )

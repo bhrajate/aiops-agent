@@ -1,10 +1,9 @@
-"""DB access for the Evaluation service (optional ``db`` extra).
+"""评估服务的数据库访问层(依赖可选的 ``db`` extra)。
 
-Reads ``golden_cases`` and writes ``evaluation_runs`` (shared/sql/003). The AI
-worker normally reaches the DB only through the control plane; the evaluation
-service is an offline/admin job, so a direct writer is acceptable for the first
-version (the task explicitly allows asyncpg/psycopg here). ``psycopg`` is
-imported lazily so importing this module never requires it.
+读取 ``golden_cases``,写入 ``evaluation_runs``(shared/sql/003)。AI worker 平时
+只通过控制面访问数据库;而评估服务属于离线/运维作业,因此第一版允许它直连写库
+(任务书明确允许在此处使用 asyncpg/psycopg)。``psycopg`` 采用惰性导入,
+使导入本模块时并不需要它。
 """
 from __future__ import annotations
 
@@ -19,8 +18,8 @@ DEFAULT_DSN_ENV = "AIOPS_DB_DSN"
 
 def _connect(dsn: str):
     try:
-        import psycopg  # noqa: WPS433 (lazy: optional dependency)
-    except ImportError as exc:  # pragma: no cover - env guard
+        import psycopg  # noqa: WPS433 (惰性导入:可选依赖)
+    except ImportError as exc:  # pragma: no cover - 环境守卫
         raise RuntimeError(
             "psycopg is required for evaluation DB access; install the 'db' "
             "extra: uv sync --extra db"
@@ -33,7 +32,7 @@ def load_golden_cases_from_db(
     tenant_id: Optional[str] = None,
     only_approved: bool = True,
 ) -> list[GoldenCase]:
-    """Load golden cases from the ``golden_cases`` table."""
+    """从 ``golden_cases`` 表加载黄金用例。"""
     dsn = dsn or os.environ.get(DEFAULT_DSN_ENV, "")
     if not dsn:
         raise ValueError(f"no DSN: set {DEFAULT_DSN_ENV} or pass dsn=")
@@ -79,10 +78,9 @@ def load_golden_cases_from_db(
 def write_evaluation_run(
     summary: EvaluationRunSummary, dsn: Optional[str] = None
 ) -> str:
-    """Insert one ``evaluation_runs`` row; return its run_id.
+    """向 ``evaluation_runs`` 插入一行,并返回其 run_id。
 
-    ``detail`` stores the by-category breakdown and per-case results so a run is
-    fully reproducible/auditable.
+    ``detail`` 保存按类别的拆分统计与逐用例结果,使一次运行完全可复现、可审计。
     """
     dsn = dsn or os.environ.get(DEFAULT_DSN_ENV, "")
     if not dsn:

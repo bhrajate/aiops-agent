@@ -1,13 +1,12 @@
-"""AIOps AI reasoning plane worker package.
+"""AIOps AI 推理面 worker 包。
 
-Implements a Temporal Python Worker that registers ``InvestigationWorkflow``
-(the RCA investigation state machine) plus its Activities. All model calls and
-internal-API calls live inside Activities; the Workflow itself stays
-deterministic (see architecture doc sections 7.2 / 7.4).
+实现一个 Temporal Python Worker,注册 ``InvestigationWorkflow``
+(RCA 调查状态机)及其 Activity。所有模型调用与内部 API 调用都发生在 Activity 内,
+工作流自身保持确定性(见架构文档 7.2 / 7.4 节)。
 """
 
 __version__ = "0.1.0"
 
-# Frozen cross-language identifiers (see docs/INTEGRATION.md "Temporal 约定").
+# 冻结的跨语言标识符(见 docs/INTEGRATION.md「Temporal 约定」)。
 WORKFLOW_TYPE_NAME = "InvestigationWorkflow"
 TASK_QUEUE = "investigation-ai"

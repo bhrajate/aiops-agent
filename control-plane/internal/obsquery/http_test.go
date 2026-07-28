@@ -132,8 +132,8 @@ func TestLiveTempoSearch(t *testing.T) {
 }
 
 func TestLiveGracefulDegradation(t *testing.T) {
-	// No URLs, no kube client configured: every tool must return an
-	// "unavailable" Result, never panic or error.
+	// 既没有配置 URL 也没有 kube 客户端:每个工具都必须返回 "unavailable" 结果,
+	// 绝不能 panic 或报错。
 	l := New(Config{})
 	scope := liveScope()
 	cases := map[string]func() (Result, error){

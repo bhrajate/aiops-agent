@@ -1,4 +1,4 @@
-"""MockProvider determinism + scenario coverage, and prompt-injection fencing."""
+"""MockProvider 的确定性与场景覆盖,以及提示注入围栏。"""
 from __future__ import annotations
 
 import pytest
@@ -22,7 +22,7 @@ async def test_triage_is_deterministic_and_scenario_aware(fault):
     p = MockProvider()
     t1, u1 = await p.quick_triage(ctx)
     t2, u2 = await p.quick_triage(ctx)
-    # Deterministic: identical output + identical usage across calls.
+    # 确定性:多次调用的输出与用量完全一致。
     assert t1.model_dump() == t2.model_dump()
     assert u1.model_dump() == u2.model_dump()
     assert t1.suspected_fault_category == fault
@@ -35,12 +35,12 @@ async def test_plan_only_uses_allowed_tools(fault):
     p = MockProvider()
     triage, _ = await p.quick_triage(ctx)
     plan, _ = await p.build_plan(ctx, triage)
-    # Plan must pass allow-list validation.
+    # 计划必须通过白名单校验。
     validate_plan(plan)
     for spec in plan.analyzers:
         allowed = set(ANALYZER_TOOLS[spec.analyzer])
         assert set(spec.tools).issubset(allowed)
-    assert plan.runbook_queries  # reference knowledge queries present
+    assert plan.runbook_queries  # 存在参考知识类查询
 
 
 @pytest.mark.parametrize("fault", FAULTS)
@@ -57,7 +57,7 @@ async def test_synthesis_supported_conclusion_with_realtime_evidence(fault):
 
 async def test_unknown_fault_yields_unresolved_low_confidence():
     ctx = make_context(fault_category="totally_unknown", severity="P3", with_change=False)
-    # Strip keyword hints from signals too.
+    # 同时把信号中的关键词线索也去掉。
     ctx.signals[0].labels = {}
     ctx.signals[0].source = "x"
     ctx.signals[0].signal_type = "y"
@@ -72,7 +72,7 @@ async def test_unknown_fault_yields_unresolved_low_confidence():
 async def test_synthesis_without_realtime_evidence_is_unresolved():
     ctx = make_context()
     p = MockProvider()
-    # Only reference knowledge -> cannot prove a root cause (architecture 12.2).
+    # 只有参考知识 -> 无法证明根因(架构 12.2)。
     knowledge = make_evidence("ev-k", "knowledge")
     syn, _ = await p.synthesize(ctx, [knowledge], [], 0)
     assert not syn.has_supported_conclusion

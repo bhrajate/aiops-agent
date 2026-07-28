@@ -1,7 +1,7 @@
-"""Fix #2 (per-round budget pre-clip) + fix #5 (max_rounds semantics).
+"""Fix #2(按轮次的预算事前裁剪)+ fix #5(max_rounds 语义)。
 
-Unit-tests the deterministic helper the workflow uses to bound a round's
-tool-call fan-out *before* dispatching analyzers, plus the round-count semantics.
+对工作流在派发分析器**之前**用于限定单轮工具调用扇出的确定性辅助函数做单元测试,
+并覆盖轮数计数语义。
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from aiops_worker.workflow import _clip_analyzers_to_budget
 
 
 def _specs():
-    # kubernetes(2 tools) + metrics(1) + logs(1) + change(1) = 5 tool calls total
+    # kubernetes(2 个工具)+ metrics(1)+ logs(1)+ change(1)= 合计 5 次工具调用
     return [
         AnalyzerSpec(
             analyzer=AnalyzerType.KUBERNETES,
@@ -34,14 +34,15 @@ def test_no_clip_when_budget_ample():
 
 
 def test_clip_truncates_straddling_analyzer():
-    # remaining=3: kubernetes(2) fits, metrics(1) fits -> exactly 3, logs/change dropped.
+    # remaining=3:kubernetes(2)放得下,metrics(1)也放得下 -> 刚好 3 次,
+    # logs 与 change 被丢弃。
     out = _clip_analyzers_to_budget(_specs(), remaining=3)
     assert _total_tools(out) == 3
     assert [s.analyzer for s in out] == [AnalyzerType.KUBERNETES, AnalyzerType.METRICS]
 
 
 def test_clip_truncates_within_an_analyzer():
-    # remaining=1: only ONE of kubernetes's two tools may run.
+    # remaining=1:kubernetes 的两个工具中只允许跑**一个**。
     out = _clip_analyzers_to_budget(_specs(), remaining=1)
     assert _total_tools(out) == 1
     assert out[0].analyzer == AnalyzerType.KUBERNETES
@@ -54,13 +55,13 @@ def test_clip_zero_or_negative_budget_yields_nothing():
 
 
 def test_clip_ignores_non_allowlisted_tools():
-    # A (malicious/hallucinated) tool outside the analyzer grant costs no budget
-    # and is not counted -- mirrors the activity's allow-list enforcement.
+    # 超出分析器授权范围的工具(恶意或幻觉产生的)不消耗预算、也不计数 ——
+    # 与 activity 侧的白名单强制保持一致。
     spec = AnalyzerSpec(
         analyzer=AnalyzerType.METRICS, tools=["query_metrics", "search_logs"]
     )
     out = _clip_analyzers_to_budget([spec], remaining=5)
-    assert out[0].tools == ["query_metrics"]  # search_logs not allowed for metrics
+    assert out[0].tools == ["query_metrics"]  # metrics 分析器无权使用 search_logs
 
 
 def test_clip_is_deterministic():
@@ -68,5 +69,5 @@ def test_clip_is_deterministic():
     a = _clip_analyzers_to_budget(specs, remaining=3)
     b = _clip_analyzers_to_budget(specs, remaining=3)
     assert [s.model_dump() for s in a] == [s.model_dump() for s in b]
-    # Input specs are not mutated (model_copy used internally).
+    # 传入的 spec 不会被改动(内部使用 model_copy)。
     assert _total_tools(specs) == 5

@@ -1,10 +1,10 @@
-"""CLI: rebuild pgvector embeddings for knowledge_items.
+"""CLI:重建 knowledge_items 的 pgvector embedding。
 
     python -m aiops_worker.knowledge.reindex [--query "..."] [--kind runbook]
 
-Reads the DSN from ``AIOPS_DB_DSN`` and the embedding provider from
-``AIOPS_EMBEDDING_PROVIDER`` (default ``mock``). After reindexing it optionally
-runs a sample semantic query so you can eyeball retrieval quality.
+DSN 取自 ``AIOPS_DB_DSN``,embedding provider 取自
+``AIOPS_EMBEDDING_PROVIDER``(默认 ``mock``)。重建完成后可选地跑一次示例语义查询,
+便于直观检查检索质量。
 """
 from __future__ import annotations
 

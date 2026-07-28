@@ -1,18 +1,16 @@
-"""Quality-gate metric computation (architecture 18.1).
+"""质量闸门指标计算(架构 18.1)。
 
-Pure functions, no I/O -> unit-testable with constructed inputs. The scorer
-turns a :class:`ReplayOutcome` into an :class:`EvaluationResult`; the aggregator
-turns a batch of results into an :class:`EvaluationRunSummary`.
+全是无 I/O 的纯函数 -> 可用构造出的输入做单元测试。打分器把
+:class:`ReplayOutcome` 转成 :class:`EvaluationResult`;聚合器把一批结果汇总成
+:class:`EvaluationRunSummary`。
 
-Definitions (first version):
-- Top-1 hit: the highest-ranked hypothesis statement contains any expected
-  root-cause keyword (case-insensitive substring).
-- Top-3 hit: any of the top-3 hypotheses does.
-- Key conclusion = a hypothesis the pipeline marked SUPPORTED (i.e. an asserted
-  root cause). evidence_citation_rate = fraction of supported conclusions that
-  cite >=1 real-time evidence id (target 100%).
-- hallucination_rate = fraction of supported conclusions with NO real-time
-  evidence backing (an unsupported root-cause claim; target < 5%).
+定义(第一版):
+- Top-1 命中:排名最高的假设陈述包含任一预期根因关键词(大小写不敏感的子串匹配)。
+- Top-3 命中:前三条假设中任一条命中即可。
+- 关键结论 = 被流水线标记为 SUPPORTED 的假设(即被断言的根因)。
+  evidence_citation_rate = 引用了 >=1 条实时证据 id 的关键结论占比(目标 100%)。
+- hallucination_rate = **没有**实时证据支撑的关键结论占比(即无依据的根因断言;
+  目标 < 5%)。
 """
 from __future__ import annotations
 
@@ -37,7 +35,7 @@ def score_outcome(
     expected_top_causes: list[str],
     outcome: ReplayOutcome,
 ) -> EvaluationResult:
-    """Score one replay against a golden case's expected causes."""
+    """按黄金用例的预期根因对单次重放打分。"""
     syn = outcome.synthesis
     hyps = sorted(syn.hypotheses, key=lambda h: h.rank) if syn else []
     predicted = [h.statement for h in hyps]
@@ -57,7 +55,7 @@ def score_outcome(
                 matched = matched or m
                 break
 
-    # Key conclusions = SUPPORTED hypotheses (asserted root causes).
+    # 关键结论 = 被标记为 SUPPORTED 的假设(即被断言的根因)。
     realtime_ids = outcome.realtime_evidence_ids
     supported = [h for h in hyps if h.status == HypothesisStatus.SUPPORTED]
     supported_with_ev = 0
@@ -87,7 +85,7 @@ def score_outcome(
 
 
 def percentile(values: list[float], pct: float) -> float:
-    """Linear-interpolation percentile (``pct`` in [0,100]). Empty -> 0.0."""
+    """线性插值分位数(``pct`` 取值范围 [0,100])。空输入 -> 0.0。"""
     if not values:
         return 0.0
     if len(values) == 1:
@@ -110,7 +108,7 @@ def aggregate(
     prompt_version: str = "v1",
     policy_version: str = "v1",
 ) -> EvaluationRunSummary:
-    """Aggregate per-case results into a run summary."""
+    """把逐用例的结果聚合成一次运行的汇总。"""
     total = len(results)
     top1 = sum(1 for r in results if r.top1_hit)
     top3 = sum(1 for r in results if r.top3_hit)
@@ -119,7 +117,7 @@ def aggregate(
     total_with_ev = sum(r.supported_with_evidence for r in results)
     total_unsupported = sum(r.unsupported_root_causes for r in results)
 
-    # No asserted root cause anywhere -> vacuously 100% cited, 0% hallucination.
+    # 完全没有被断言的根因 -> 按空集处理:引用率记 100%,幻觉率记 0%。
     citation_rate = (total_with_ev / total_supported) if total_supported else 1.0
     hallucination_rate = (
         total_unsupported / total_supported
@@ -157,7 +155,7 @@ def aggregate(
     )
 
 
-# First-version quality gates (architecture 18.1).
+# 第一版的质量闸门阈值(架构 18.1)。
 GATE_TOP3_RECALL = 0.70
 GATE_EVIDENCE_CITATION = 1.0
 GATE_HALLUCINATION_MAX = 0.05
@@ -165,7 +163,7 @@ GATE_P95_SEC = 300.0
 
 
 def gate_report(summary: EvaluationRunSummary) -> dict[str, bool]:
-    """Evaluate the summary against the first-version release gates."""
+    """按第一版发布闸门评估汇总结果是否达标。"""
     return {
         "top3_recall>=0.70": summary.top3_rate >= GATE_TOP3_RECALL,
         "evidence_citation==1.0": summary.evidence_citation_rate >= GATE_EVIDENCE_CITATION,

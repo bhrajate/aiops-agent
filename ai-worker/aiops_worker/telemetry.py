@@ -1,10 +1,9 @@
-"""OpenTelemetry tracing for the AI worker (architecture §16).
+"""AI worker 的 OpenTelemetry 链路追踪(架构 §16)。
 
-Optional and lazy: when ``AIOPS_OTLP_ENDPOINT`` is unset, ``build_interceptors``
-returns an empty list and no OTel dependency is required. When set, a
-TracerProvider with an OTLP HTTP exporter is installed and Temporal's built-in
-``TracingInterceptor`` links workflow/activity spans into the same trace as the
-Go control plane (propagated via the standard W3C traceparent).
+可选且惰性:未设置 ``AIOPS_OTLP_ENDPOINT`` 时,``build_interceptors`` 返回空列表,
+也不需要任何 OTel 依赖。设置后会装配带 OTLP HTTP exporter 的 TracerProvider,
+并由 Temporal 内置的 ``TracingInterceptor`` 把 workflow/activity 的 span 挂到与
+Go 控制面同一条 trace 上(通过标准的 W3C traceparent 传播)。
 """
 from __future__ import annotations
 
@@ -15,7 +14,7 @@ logger = logging.getLogger("aiops_worker.telemetry")
 
 
 def build_interceptors(otlp_endpoint: str, service_name: str) -> Sequence[Any]:
-    """Return Temporal interceptors for tracing (empty if disabled/unavailable)."""
+    """返回用于链路追踪的 Temporal interceptor(关闭或不可用时返回空列表)。"""
     if not otlp_endpoint:
         return []
     try:
@@ -36,6 +35,6 @@ def build_interceptors(otlp_endpoint: str, service_name: str) -> Sequence[Any]:
         trace.set_tracer_provider(provider)
         logger.info("otlp tracing enabled endpoint=%s", endpoint)
         return [TracingInterceptor()]
-    except Exception as exc:  # pragma: no cover - optional dep / network
+    except Exception as exc:  # pragma: no cover - 可选依赖 / 网络问题
         logger.warning("otlp tracing unavailable, continuing without: %s", exc)
         return []

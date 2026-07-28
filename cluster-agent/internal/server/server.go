@@ -1,5 +1,5 @@
-// Package server implements the read-only Cluster Agent HTTP interface
-// defined in docs/INTEGRATION.md ("Cluster Agent 工具协议").
+// Package server 实现 docs/INTEGRATION.md("Cluster Agent 工具协议")中定义的
+// 只读 Cluster Agent HTTP 接口。
 package server
 
 import (
@@ -15,11 +15,11 @@ import (
 	"github.com/aiops/cluster-agent/internal/tools"
 )
 
-// maxRequestBody bounds the POST /tools body so a single request cannot force
-// unbounded memory allocation during JSON decode (defense-in-depth DoS guard).
+// maxRequestBody 限制 POST /tools 的请求体大小,避免单个请求在 JSON 解码阶段
+// 逼出无界内存分配(纵深防御的 DoS 守卫)。
 const maxRequestBody = 1 << 20 // 1 MiB
 
-// Server wires the tool registry to an http.Handler.
+// Server 把工具注册表接到 http.Handler 上。
 type Server struct {
 	clusterID string
 	reg       *tools.Registry
@@ -28,8 +28,7 @@ type Server struct {
 	metrics   *metrics
 }
 
-// New constructs a Server. clusterID is the default cluster id injected when a
-// request omits scope.cluster_id.
+// New 构造 Server。clusterID 是请求未带 scope.cluster_id 时注入的默认集群 id。
 func New(clusterID string, reg *tools.Registry, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
@@ -39,7 +38,7 @@ func New(clusterID string, reg *tools.Registry, log *slog.Logger) *Server {
 	return s
 }
 
-// Handler exposes the router (with access logging) as an http.Handler.
+// Handler 以 http.Handler 形式暴露路由(带访问日志)。
 func (s *Server) Handler() http.Handler { return s.logging(s.mux) }
 
 func (s *Server) routes() {
@@ -49,7 +48,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /metrics", s.metrics.handler()) // 架构 §16
 }
 
-// toolRequest is the POST /tools/{tool_name} body.
+// toolRequest 是 POST /tools/{tool_name} 的请求体。
 type toolRequest struct {
 	Arguments map[string]any   `json:"arguments"`
 	Scope     datasource.Scope `json:"scope"`
@@ -66,9 +65,9 @@ func (s *Server) handleListTools(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("tool_name")
 
-	// metricTool keeps the Prometheus "tool" label bounded: only registered tool
-	// names become label values, everything else collapses to a fixed constant so
-	// an anonymous caller cannot explode label cardinality via random tool names.
+	// metricTool 把 Prometheus 的 "tool" 标签基数控制住:只有已注册的工具名才会
+	// 成为标签值,其余一律收敛到固定常量,这样匿名调用方就无法用随机工具名把标签
+	// 基数打爆。
 	metricTool := "unknown"
 	if s.reg.Has(name) {
 		metricTool = name
@@ -76,7 +75,7 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 
 	var req toolRequest
 	if r.Body != nil {
-		// Cap the body so a large payload cannot force unbounded allocation.
+		// 限制请求体大小,避免超大载荷逼出无界内存分配。
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		dec := json.NewDecoder(r.Body)
 		dec.DisallowUnknownFields()
@@ -92,8 +91,8 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Scope injection: the Tool Gateway is the source of truth for cluster_id.
-	// Fall back to the agent's configured cluster when omitted.
+	// Scope 注入:cluster_id 以 Tool Gateway 为事实源;未下发时回退到 agent
+	// 自身配置的集群。
 	if strings.TrimSpace(req.Scope.ClusterID) == "" {
 		req.Scope.ClusterID = s.clusterID
 	}

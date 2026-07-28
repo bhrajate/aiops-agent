@@ -1,9 +1,8 @@
-"""F2: runtime enforcement of the evidence-first invariant.
+"""F2:证据优先不变式的运行时强制。
 
-Previously ``has_supported_conclusion`` trusted the model's self-reported
-status, so a hypothesis claiming ``supported`` while citing nothing (or citing
-only a runbook) reached DiagnosisStatus.RESOLVED -- a "confirmed root cause"
-with no evidence behind it. These tests pin the deterministic downgrade.
+此前 ``has_supported_conclusion`` 信任模型自报的状态,于是一条声称 ``supported``
+却什么都没引用(或只引用了 runbook)的假设也能走到 DiagnosisStatus.RESOLVED ——
+形成一个背后毫无证据的「已确认根因」。这些测试固定住确定性降级的行为。
 """
 from __future__ import annotations
 
@@ -62,14 +61,14 @@ def test_supported_citing_nothing_is_downgraded():
     h = out.hypotheses[0]
     assert h.status == HypothesisStatus.UNRESOLVED
     assert not out.has_supported_conclusion
-    # The statement survives as a lead, and the gap is now explicit.
+    # 结论陈述作为线索保留下来,同时缺口被显式标了出来。
     assert h.statement == "根因是新版本回归"
     assert h.missing_evidence
     assert getattr(h, "downgrade_reason", None) == UNGROUNDED_DOWNGRADE_REASON
 
 
 def test_supported_citing_only_runbook_is_downgraded():
-    """Reference knowledge can seed a hypothesis but never prove one."""
+    """参考知识可以启发假设,但永远不能证明假设。"""
     syn = SynthesisResult(hypotheses=[_hyp(support=["ev-kb"])])
     out, downgraded = enforce_evidence_grounding(syn, [_knowledge("ev-kb")])
     assert downgraded == ["hyp-1"]
@@ -116,12 +115,12 @@ def test_input_is_not_mutated():
 
 
 def test_downgrade_prevents_resolved_diagnosis():
-    """The end-to-end consequence: no RESOLVED without real-time proof."""
+    """端到端的结果:没有实时证据就不会出现 RESOLVED。"""
     ctx = IncidentContext(incident=Incident(incident_id="inc-1"))
     ungrounded = SynthesisResult(hypotheses=[_hyp(support=[])])
 
     before = build_diagnosis("inc-1", ctx, ungrounded, escalated=False)
-    assert before.status.value == "resolved"  # old behavior, for contrast
+    assert before.status.value == "resolved"  # 旧行为,仅作对照
 
     after_syn, _ = enforce_evidence_grounding(ungrounded, [_realtime()])
     after = build_diagnosis("inc-1", ctx, after_syn, escalated=False)
@@ -130,7 +129,7 @@ def test_downgrade_prevents_resolved_diagnosis():
 
 
 # --------------------------------------------------------------------------
-# the activity applies it before persisting
+# activity 在落库之前就会应用该规则
 # --------------------------------------------------------------------------
 
 
@@ -166,6 +165,6 @@ async def test_activity_persists_only_grounded_status(monkeypatch):
         )
     )
     assert out.ungrounded_downgraded == ["hyp-1"]
-    # The DB is the source of truth -- it must never hold the unproven claim.
+    # 数据库是事实源 —— 它绝不能存下未经证实的断言。
     assert client.persisted[0].status == HypothesisStatus.UNRESOLVED
     assert not out.synthesis.has_supported_conclusion

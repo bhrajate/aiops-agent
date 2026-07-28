@@ -1,7 +1,7 @@
 package obsquery
 
-// live_loki.go: read-only Loki HTTP API client.
-// Only GET /loki/api/v1/query_range is used.
+// live_loki.go:只读的 Loki HTTP API 客户端。
+// 只使用 GET /loki/api/v1/query_range。
 
 import (
 	"context"
@@ -19,20 +19,19 @@ type lokiClient struct {
 	hc   *http.Client
 }
 
-// lokiResponse models the streams envelope of Loki query_range.
+// lokiResponse 建模 Loki query_range 的 streams 响应结构。
 type lokiResponse struct {
 	Status string `json:"status"`
 	Data   struct {
 		ResultType string `json:"resultType"`
 		Result     []struct {
 			Stream map[string]string `json:"stream"`
-			Values [][]string        `json:"values"` // [ ["<ns epoch>", "line"], ... ]
+			Values [][]string        `json:"values"` // [ ["<纳秒时间戳>", "日志行"], ... ]
 		} `json:"result"`
 	} `json:"data"`
 }
 
-// defaultLogQL builds a LogQL selector for the resource, falling back to the
-// whole namespace when no resource is scoped.
+// defaultLogQL 为该资源构建 LogQL 选择器;未限定资源时回退到整个命名空间。
 func defaultLogQL(scope Scope) string {
 	res := liveResource(scope)
 	if res == "" {
@@ -42,7 +41,7 @@ func defaultLogQL(scope Scope) string {
 }
 
 func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time, clusterScope ScopeLabel) (Result, error) {
-	// Reject names that could break out of the injected label matchers.
+	// 拒绝可能突破注入的 label 匹配器的名字。
 	if err := validateDNS1123("namespace", ns(scope)); err != nil {
 		return Result{}, err
 	}
@@ -109,7 +108,7 @@ func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[strin
 			})
 		}
 	}
-	// Newest first for readability.
+	// 最新的排在前面,便于阅读。
 	sort.SliceStable(lines, func(i, j int) bool {
 		return lines[i]["timestamp"].(string) > lines[j]["timestamp"].(string)
 	})
@@ -132,7 +131,7 @@ func (c *lokiClient) queryRange(ctx context.Context, scope Scope, args map[strin
 	return Result{Source: "loki", Summary: summary, Raw: raw, Freshness: "live"}, nil
 }
 
-// detectLogLevel does a cheap severity classification of a log line.
+// detectLogLevel 对日志行做低成本的严重级别分类。
 func detectLogLevel(msg string) string {
 	u := strings.ToUpper(msg)
 	switch {

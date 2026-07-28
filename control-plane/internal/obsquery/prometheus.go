@@ -1,7 +1,7 @@
 package obsquery
 
-// live_prometheus.go: read-only Prometheus HTTP API client.
-// Only GET /api/v1/query_range is used — no remote-write, admin or delete API.
+// live_prometheus.go:只读的 Prometheus HTTP API 客户端。
+// 只使用 GET /api/v1/query_range —— 不涉及 remote-write、admin 或 delete API。
 
 import (
 	"context"
@@ -15,10 +15,9 @@ import (
 	"time"
 )
 
-// maxUpstreamBody caps how much of an upstream (Prometheus / Loki / Tempo)
-// response body we will read before decoding, so a hostile or misbehaving
-// upstream cannot OOM the agent with an unbounded stream. It is a var (not a
-// const) purely so tests can shrink it; production always uses 32 MiB.
+// maxUpstreamBody 限制解码前从上游(Prometheus / Loki / Tempo)响应体读取的最大
+// 字节数,使恶意或异常的上游无法用无界流把 agent 打到 OOM。这里用 var 而非 const
+// 纯粹是为了让测试能调小它;生产环境始终是 32 MiB。
 var maxUpstreamBody int64 = 32 << 20 // 32 MiB
 
 type promClient struct {
@@ -26,7 +25,7 @@ type promClient struct {
 	hc   *http.Client
 }
 
-// promResponse models the subset of the Prometheus query_range envelope we use.
+// promResponse 只建模我们用到的 Prometheus query_range 响应结构子集。
 type promResponse struct {
 	Status    string `json:"status"`
 	ErrorType string `json:"errorType"`
@@ -40,8 +39,8 @@ type promResponse struct {
 	} `json:"data"`
 }
 
-// defaultLiveMetricExpr builds a generic 5xx error-ratio query for the resource,
-// always scoped to the namespace so the default never queries cluster-wide.
+// defaultLiveMetricExpr 为该资源构建通用的 5xx 错误率查询,并始终限定在命名空间内,
+// 使默认查询绝不会扩散到整个集群。
 func defaultLiveMetricExpr(namespace, resource string) string {
 	if resource == "" {
 		return fmt.Sprintf(
@@ -56,7 +55,7 @@ func defaultLiveMetricExpr(namespace, resource string) string {
 func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[string]any, from, to time.Time, clusterScope ScopeLabel) (Result, error) {
 	namespace := ns(scope)
 	resource := liveResource(scope)
-	// Reject names that could break out of the injected label matchers.
+	// 拒绝可能突破注入的 label 匹配器的名字。
 	if err := validateDNS1123("namespace", namespace); err != nil {
 		return Result{}, err
 	}
@@ -146,7 +145,7 @@ func (p *promClient) queryRange(ctx context.Context, scope Scope, args map[strin
 	return Result{Source: "prometheus", Summary: summary, Raw: raw, Freshness: "live"}, nil
 }
 
-// parsePromValue converts a Prometheus sample value (string or number) to float.
+// parsePromValue 把 Prometheus 采样值(字符串或数字)转换为 float。
 func parsePromValue(v any) (float64, error) {
 	switch t := v.(type) {
 	case string:
@@ -172,7 +171,7 @@ func httpGetJSON(ctx context.Context, hc *http.Client, endpoint string, out any)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("upstream status %d", resp.StatusCode)
 	}
-	// Bound the read: never decode more than maxUpstreamBody from the upstream.
+	// 限制读取量:从上游解码的字节数绝不超过 maxUpstreamBody。
 	return json.NewDecoder(io.LimitReader(resp.Body, maxUpstreamBody)).Decode(out)
 }
 

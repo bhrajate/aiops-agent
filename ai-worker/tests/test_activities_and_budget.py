@@ -1,5 +1,5 @@
-"""Activity wiring + bounded-execution escalation, with NO Temporal server and
-NO network. The internal-API client is replaced by an in-memory fake."""
+"""Activity 接线与有界执行升级路径的测试,**不需要** Temporal 服务,也**不走**网络。
+内部 API 客户端被替换为内存版 fake。"""
 from __future__ import annotations
 
 import pytest
@@ -25,7 +25,7 @@ from tests.conftest import make_context, make_evidence
 
 
 class FakeInternalClient:
-    """In-memory stand-in for InternalAPIClient. Records writes, serves tools."""
+    """InternalAPIClient 的内存替身。记录写入操作,并提供工具调用响应。"""
 
     def __init__(self, context):
         self._context = context
@@ -118,7 +118,7 @@ async def test_full_activity_chain_produces_resolved_diagnosis(wired):
                 spec=spec,
             )
         )
-        assert not out.denied_tools  # planner only picked allowed tools
+        assert not out.denied_tools  # 规划器只挑选了被允许的工具
         all_evidence.extend(out.evidences)
         analyzer_results.append(out.result)
         total_tool_calls += out.tool_calls
@@ -134,7 +134,7 @@ async def test_full_activity_chain_produces_resolved_diagnosis(wired):
         )
     )
     assert syn_out.synthesis.has_supported_conclusion
-    assert fake.hypotheses is not None  # persisted via internal API
+    assert fake.hypotheses is not None  # 已通过内部 API 落库
 
     status = await acts.publish_diagnosis(
         PublishDiagnosisInput(
@@ -157,7 +157,7 @@ async def test_run_analyzer_skips_tools_outside_grant(wired):
     acts, fake, ctx = wired
     from aiops_worker.contracts import AnalyzerSpec, AnalyzerType
 
-    # A metrics analyzer that (maliciously) lists a non-granted tool.
+    # 一个(恶意地)列出了未授权工具的 metrics 分析器。
     spec = AnalyzerSpec(
         analyzer=AnalyzerType.METRICS, tools=["query_metrics", "search_logs"]
     )
@@ -176,21 +176,21 @@ async def test_run_analyzer_skips_tools_outside_grant(wired):
 
 
 def test_budget_exhaustion_triggers_escalation_simulation():
-    """Simulate the workflow's bounded loop: a tiny budget must stop the loop
-    and escalate rather than looping forever (architecture 8.4)."""
+    """模拟工作流的有界循环:极小的预算必须让循环停下并升级,
+    而不是无限循环下去(架构 8.4)。"""
     budget = Budget(max_rounds=1, max_tokens=10, max_cost_usd=0.00001, max_tool_calls=1)
     usage = Usage()
     escalation_reason = None
     rounds_run = 0
 
-    for round_index in range(100):  # hard ceiling proves it must break early
+    for round_index in range(100):  # 设一个硬上限,以证明循环必须提前跳出
         usage.rounds = round_index + 1
         stop = usage.budget_exceeded(budget)
         if stop is not None:
             escalation_reason = f"budget_exhausted:{stop}"
             break
         rounds_run += 1
-        # Simulate one round consuming resources.
+        # 模拟一轮执行所消耗的资源。
         usage.add_model_usage(tokens=50, cost_usd=0.01)
         usage.tool_calls += 2
 

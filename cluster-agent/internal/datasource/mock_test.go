@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// toolMethods enumerates every DataSource method for table-driven coverage.
+// toolMethods 枚举全部 DataSource 方法,用于表驱动覆盖。
 func toolMethods(ds DataSource) map[string]func(context.Context, Scope, map[string]any) (Result, error) {
 	return map[string]func(context.Context, Scope, map[string]any) (Result, error){
 		"get_workload_state":    ds.GetWorkloadState,

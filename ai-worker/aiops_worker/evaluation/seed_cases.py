@@ -110,8 +110,8 @@ SEED_GOLDEN_CASES: list[GoldenCase] = [
             with_change=True,
         ),
     ),
-    # 5) 资源瓶颈 via keyword inference (no explicit fault_category) —
-    #    exercises infer_fault_category from signal labels (OOMKilled).
+    # 5) 资源瓶颈,通过关键词推断得出(不显式给 fault_category)——
+    #    用于检验 infer_fault_category 能否从信号标签(OOMKilled)推断类别。
     GoldenCase(
         case_id="gc-pod-oom-002",
         incident_id="inc-pod-oom-002",
@@ -125,7 +125,7 @@ SEED_GOLDEN_CASES: list[GoldenCase] = [
                 "version": 1,
                 "status": "closed",
                 "severity": "P2",
-                # fault_category intentionally omitted -> inferred from signals.
+                # 故意不写 fault_category -> 交由信号推断得出。
                 "affected_resources": [
                     {"kind": "Deployment", "name": "search-api", "namespace": "search"}
                 ],
@@ -142,5 +142,5 @@ SEED_GOLDEN_CASES: list[GoldenCase] = [
 
 
 def load_seed_cases() -> list[GoldenCase]:
-    """Return a fresh copy of the seed cases (validated)."""
+    """返回一份新的 seed 用例副本(已通过校验)。"""
     return [GoldenCase.model_validate(c.model_dump()) for c in SEED_GOLDEN_CASES]

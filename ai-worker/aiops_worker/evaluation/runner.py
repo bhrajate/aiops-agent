@@ -1,6 +1,6 @@
-"""Batch runner: replay a set of golden cases and aggregate metrics.
+"""批量执行器:重放一组黄金用例并聚合指标。
 
-Kept separate from the CLI so it is importable/testable without argparse.
+与 CLI 分离,便于在不引入 argparse 的情况下被导入和测试。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ async def run_evaluation(
     policy_version: str = "v1",
     tenant_id: str = "default",
 ) -> EvaluationRunSummary:
-    """Replay every case and return an aggregated run summary."""
+    """重放全部用例,并返回聚合后的运行汇总。"""
     pipeline = OfflineReplayPipeline(provider=provider)
     results = []
     for case in cases:

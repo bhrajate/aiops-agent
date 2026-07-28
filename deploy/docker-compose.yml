@@ -47,7 +47,7 @@ services:
       retries: 20
     restart: unless-stopped
 
-  # ---------------------------------------------------------------- Temporal Server
+  # ---------------------------------------------------------------- Temporal 服务端
   temporal:
     image: temporalio/auto-setup:1.25.2
     container_name: aiops-temporal

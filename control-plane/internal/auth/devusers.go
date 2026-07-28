@@ -9,7 +9,7 @@ import (
 // DevUser 开发用户(仅 hs256 模式的本地登录端点使用;生产由 IdP 负责)。
 type DevUser struct {
 	Username     string
-	PasswordHash string // sha256 hex
+	PasswordHash string // sha256 十六进制串
 	Principal    Principal
 }
 

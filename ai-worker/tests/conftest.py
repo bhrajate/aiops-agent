@@ -1,4 +1,4 @@
-"""Shared test fixtures/builders. No real Temporal server or network."""
+"""共用的测试 fixture 与构造器。不依赖真实 Temporal 服务,也不走网络。"""
 from __future__ import annotations
 
 from aiops_worker.contracts import (

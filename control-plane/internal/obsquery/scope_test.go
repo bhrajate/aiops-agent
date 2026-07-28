@@ -60,8 +60,8 @@ func TestInjectNamespaceMatchers(t *testing.T) {
 	}
 }
 
-// TestPromNamespaceInjected verifies the namespace matcher reaches the wire for
-// both the default and a caller-supplied expression.
+// TestPromNamespaceInjected 验证无论是默认表达式还是调用方传入的表达式,
+// namespace 匹配器都会真正出现在发往上游的请求里。
 func TestPromNamespaceInjected(t *testing.T) {
 	var gotQuery string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +71,7 @@ func TestPromNamespaceInjected(t *testing.T) {
 	defer srv.Close()
 	l := New(Config{PrometheusURL: srv.URL})
 
-	// Default expression.
+	// 默认表达式。
 	if _, err := l.QueryMetrics(context.Background(), liveScope(), map[string]any{}); err != nil {
 		t.Fatalf("default QueryMetrics: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestPromNamespaceInjected(t *testing.T) {
 		t.Errorf("default query missing namespace matcher: %q", gotQuery)
 	}
 
-	// Caller expression without namespace gets one injected.
+	// 调用方表达式未带 namespace 时会被注入一个。
 	_, err := l.QueryMetrics(context.Background(), liveScope(), map[string]any{"expr": `rate(http_requests_total{code=~"5.."}[5m])`})
 	if err != nil {
 		t.Fatalf("custom QueryMetrics: %v", err)
@@ -139,7 +139,7 @@ func TestWindowInvertedFallback(t *testing.T) {
 	scope := liveScope()
 	scope.TimeRange = &TimeRange{
 		From: now.Format(time.RFC3339),
-		To:   now.Add(-time.Hour).Format(time.RFC3339), // to < from
+		To:   now.Add(-time.Hour).Format(time.RFC3339), // to 早于 from
 	}
 	from, to := window(scope, func() time.Time { return now })
 	if !to.After(from) {
@@ -147,9 +147,8 @@ func TestWindowInvertedFallback(t *testing.T) {
 	}
 }
 
-// TestUpstreamBodyLimited proves the LimitReader truncates an oversized upstream
-// body: with a tiny cap the (otherwise valid) JSON is cut off mid-stream and
-// decoding fails instead of buffering everything.
+// TestUpstreamBodyLimited 证明 LimitReader 会截断超大的上游响应体:把上限调得极小后,
+// 本来合法的 JSON 会在流中途被切断,解码失败,而不是把全部内容缓冲下来。
 func TestUpstreamBodyLimited(t *testing.T) {
 	orig := maxUpstreamBody
 	maxUpstreamBody = 64 // bytes
@@ -157,7 +156,7 @@ func TestUpstreamBodyLimited(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// A large but valid JSON document, far bigger than the 64-byte cap.
+		// 一份体量很大但合法的 JSON 文档,远超 64 字节的上限。
 		var b strings.Builder
 		b.WriteString(`{"status":"success","data":{"resultType":"matrix","result":[`)
 		for i := 0; i < 1000; i++ {
@@ -180,12 +179,12 @@ func TestUpstreamBodyLimited(t *testing.T) {
 
 func TestPromStepAdaptive(t *testing.T) {
 	base := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	// A 24h window at <=1000 points must yield step >= ~86s.
+	// 24 小时时间窗在不超过 1000 个采样点的约束下,step 必须 >= 约 86 秒。
 	step := promStep(base.Add(-24*time.Hour), base)
 	if step < 80*time.Second {
 		t.Errorf("24h step too small: %v", step)
 	}
-	// A tiny window keeps the 60s default (or smaller).
+	// 极小的时间窗保持 60 秒默认值(或更小)。
 	if s := promStep(base.Add(-2*time.Minute), base); s > 60*time.Second {
 		t.Errorf("2m step too large: %v", s)
 	}

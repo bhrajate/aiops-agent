@@ -1,16 +1,15 @@
-"""Deterministic mock model provider.
+"""确定性的 mock 模型 provider。
 
-Requires no API key and produces stable, scenario-aware Chinese output so the
-whole InvestigationWorkflow runs end-to-end offline (for tests, demos and CI).
+不需要 API key,产出稳定且贴合场景的中文输出,因此整条 InvestigationWorkflow
+可以完全离线端到端跑通(用于测试、演示与 CI)。
 
-Determinism rules:
-- No randomness, no clock reads.
-- Token/cost estimates are a pure function of input text length.
-- Output is chosen from a fixed scenario table keyed by fault category, which
-  is inferred deterministically from the incident + signals.
+确定性规则:
+- 不含随机数,不读时钟。
+- token / 成本估算是输入文本长度的纯函数。
+- 输出从以故障类别为键的固定场景表中选取,而故障类别由故障单 + 信号确定性地推断。
 
-Four fault scenarios are covered (architecture 6.2 fault_category):
-release_regression, resource_saturation, dependency_failure, config_error.
+覆盖四类故障场景(架构 6.2 的 fault_category):
+release_regression、resource_saturation、dependency_failure、config_error。
 """
 from __future__ import annotations
 
@@ -23,15 +22,15 @@ from ..contracts import (
     HypothesisStatus,
     IncidentContext,
     InvestigationPlan,
-    AnalyzerSpec as _Spec,  # noqa: F401  (kept for readability of table)
+    AnalyzerSpec as _Spec,  # noqa: F401  (保留以提升下方场景表的可读性)
     ModelUsage,
     SynthesisResult,
     TriageResult,
 )
 from .base import ModelProvider, fence_evidence_as_data
 
-# Per-fault scenario knowledge. Each entry drives triage, planning and
-# synthesis so the three stages tell a coherent story.
+# 按故障类别组织的场景知识。每个条目同时驱动初判、规划与综合三个阶段,
+# 使三者讲出前后一致的故事。
 _SCENARIOS: dict[str, dict] = {
     "release_regression": {
         "triage": "近期发布后 checkout 服务 5xx 错误率显著上升,疑似新版本回归。",
@@ -106,11 +105,11 @@ _SCENARIOS: dict[str, dict] = {
     },
 }
 
-# Fallback for an unknown fault category: produces a low-confidence,
-# non-conclusive result so the workflow escalates rather than fabricating.
+# 未知故障类别的兜底:产出低置信度、非结论性的结果,让工作流走升级路径,
+# 而不是编造答案。
 _UNKNOWN_KEY = "__unknown__"
 
-# Keyword hints used to infer a fault category when the incident lacks one.
+# 当故障单本身没有类别时,用于推断故障类别的关键词线索。
 _KEYWORD_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("release_regression", ("release", "deploy", "版本", "发布", "rollout", "canary")),
     ("resource_saturation", ("oom", "cpu", "memory", "throttl", "内存", "饱和", "resource")),
@@ -120,17 +119,17 @@ _KEYWORD_HINTS: list[tuple[str, tuple[str, ...]]] = [
 
 
 def _deepcopy_queries(queries: dict) -> dict:
-    """Copy the scenario table's query args so callers can never mutate the
-    shared table (the mock must stay deterministic across investigations)."""
+    """复制场景表中的查询参数,使调用方永远无法改动这张共享表
+    (mock 必须在多次调查之间保持确定性)。"""
     return {tool: dict(args) for tool, args in (queries or {}).items()}
 
 
 def _estimate_usage(*texts: str, out_len: int = 300) -> ModelUsage:
-    """Deterministic token/cost estimate: ~4 chars per token."""
+    """确定性的 token / 成本估算:约每 4 个字符算 1 个 token。"""
     in_chars = sum(len(t) for t in texts)
     input_tokens = max(1, in_chars // 4)
     output_tokens = max(1, out_len // 4)
-    # Cheap flat rate for the mock (USD per 1K tokens).
+    # mock 用的简单固定费率(美元 / 千 token)。
     cost = round((input_tokens + output_tokens) / 1000.0 * 0.003, 6)
     return ModelUsage(
         provider="mock",
@@ -142,10 +141,10 @@ def _estimate_usage(*texts: str, out_len: int = 300) -> ModelUsage:
 
 
 def infer_fault_category(context: IncidentContext) -> str:
-    """Deterministically infer the fault category from incident + signals.
+    """由故障单 + 信号确定性地推断故障类别。
 
-    Priority: explicit incident.fault_category (if known) -> keyword hints from
-    signal labels / alert names -> unknown.
+    优先级:显式的 incident.fault_category(若为已知类别)-> 信号标签 / 告警名中的
+    关键词线索 -> unknown。
     """
     fc = (context.incident.fault_category or "").strip().lower()
     if fc in _SCENARIOS:
@@ -198,7 +197,7 @@ class MockProvider(ModelProvider):
         key = infer_fault_category(context)
         sc = _SCENARIOS.get(key)
         if sc is None:
-            # Unknown: minimal generic probe.
+            # 未知类别:只做最小化的通用探查。
             plan = InvestigationPlan(
                 analyzers=[
                     AnalyzerSpec(
@@ -215,7 +214,7 @@ class MockProvider(ModelProvider):
                 runbook_queries=["通用故障排查手册"],
             )
         elif supplemental_from is not None:
-            # Supplemental round: target the missing evidence with 1 analyzer.
+            # 补充轮次:用 1 个分析器定向补齐缺失的证据。
             a, _obj, tools, queries = sc["analyzers"][1]
             plan = InvestigationPlan(
                 analyzers=[
@@ -245,7 +244,7 @@ class MockProvider(ModelProvider):
         return InvestigationPlan.model_validate(plan.model_dump()), usage
 
     async def analyze(self, context, spec: AnalyzerSpec, evidences: list[Evidence]):
-        # Fence untrusted evidence as DATA (defense is exercised even in mock).
+        # 把不可信证据围栏标记为**数据**(即便在 mock 中也照样走这条防线)。
         _ = fence_evidence_as_data(evidences)
         realtime = [e for e in evidences if not e.is_reference_knowledge]
         findings = [
@@ -268,7 +267,7 @@ class MockProvider(ModelProvider):
             comp = context.incident.affected_resources[0]
 
         if key == _UNKNOWN_KEY or not realtime_ids:
-            # Low confidence, unresolved -> workflow escalates to human.
+            # 低置信度且未定论 -> 工作流升级给人工。
             hyp = Hypothesis(
                 hypothesis_id="hyp-1",
                 rank=1,
@@ -283,7 +282,7 @@ class MockProvider(ModelProvider):
             result = SynthesisResult(hypotheses=[hyp])
         else:
             sc = _SCENARIOS[key]
-            # Enough real-time evidence -> supported conclusion.
+            # 实时证据充足 -> 给出被支撑的结论。
             supported = Hypothesis(
                 hypothesis_id="hyp-1",
                 rank=1,

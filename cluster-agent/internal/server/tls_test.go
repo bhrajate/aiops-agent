@@ -45,9 +45,9 @@ func TestTLSConfigFromEnv(t *testing.T) {
 	}
 }
 
-// TestMTLSEndToEnd generates a CA + server + client cert, starts the agent with
-// RequireAndVerifyClientCert, and proves: (a) a client with a valid cert can
-// reach /healthz, and (b) a client without a cert is rejected.
+// TestMTLSEndToEnd 生成 CA + 服务端 + 客户端证书,以 RequireAndVerifyClientCert
+// 启动 agent,并证明:(a) 持有有效证书的客户端可以访问 /healthz;
+// (b) 不带证书的客户端会被拒绝。
 func TestMTLSEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	caCert, caKey := genCA(t)
@@ -79,11 +79,11 @@ func TestMTLSEndToEnd(t *testing.T) {
 	defer srv.Close()
 	url := "https://" + ln.Addr().String() + "/healthz"
 
-	// Root pool trusting our CA (used by both clients to verify the server).
+	// 信任我们自建 CA 的根证书池(两个客户端都用它校验服务端)。
 	rootPool := x509.NewCertPool()
 	rootPool.AddCert(caCert)
 
-	// (a) valid client cert -> success.
+	// (a) 持有有效客户端证书 -> 成功。
 	clientCertDER, clientKey := genLeaf(t, caCert, caKey, "control-plane", nil)
 	clientTLSCert := tls.Certificate{
 		Certificate: [][]byte{clientCertDER},
@@ -102,7 +102,7 @@ func TestMTLSEndToEnd(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// (b) no client cert -> rejected at TLS handshake.
+	// (b) 不带客户端证书 -> 在 TLS 握手阶段被拒绝。
 	noCertClient := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		RootCAs: rootPool,
 	}}}
@@ -111,7 +111,7 @@ func TestMTLSEndToEnd(t *testing.T) {
 	}
 }
 
-// --- cert helpers (test-only, self-signed) ---
+// --- 证书辅助函数(仅测试用,自签名) ---
 
 func genCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()

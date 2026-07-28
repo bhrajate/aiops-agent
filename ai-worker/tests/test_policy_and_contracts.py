@@ -1,4 +1,4 @@
-"""Deterministic deep-RCA policy, contract validation, and diagnosis assembly."""
+"""确定性的深度 RCA 策略、契约校验,以及诊断结论组装。"""
 from __future__ import annotations
 
 import pytest
@@ -21,14 +21,14 @@ from aiops_worker.policy import build_diagnosis, evaluate_deep_rca_policy
 from tests.conftest import make_context
 
 
-# -- deep RCA policy is deterministic (never an LLM) ------------------------
+# -- 深度 RCA 策略是确定性的(绝不交给 LLM) -------------------------------
 
 
 def test_deep_rca_true_for_p1_p2():
     for sev in ("P1", "P2"):
         ctx = make_context(severity=sev, with_change=False)
         ctx.incident.blast_radius = {}
-        # even without triage recommendation
+        # 即使初判没有给出建议也照样成立
         from aiops_worker.contracts import TriageResult
 
         triage = TriageResult(summary="x", recommend_deep_rca=False)
@@ -72,7 +72,7 @@ def test_deep_rca_is_pure_and_repeatable():
     assert r1 == r2
 
 
-# -- Pydantic contract validation -------------------------------------------
+# -- Pydantic 契约校验 -------------------------------------------------------
 
 
 def test_confidence_bounds_enforced():
@@ -116,7 +116,7 @@ def test_validate_plan_rejects_unknown_tool():
         validate_plan(plan)
 
 
-# -- diagnosis assembly -----------------------------------------------------
+# -- 诊断结论组装 -----------------------------------------------------------
 
 
 def test_build_diagnosis_resolved_when_supported():
@@ -158,7 +158,7 @@ def test_build_diagnosis_unresolved_when_escalated():
     assert "more metrics" in d.missing_information
 
 
-# -- budget accounting ------------------------------------------------------
+# -- 预算核算 ---------------------------------------------------------------
 
 
 def test_usage_budget_exceeded_dimensions():

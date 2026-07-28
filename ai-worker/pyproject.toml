@@ -13,15 +13,14 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.39"]
-# Observability (architecture §16): only needed when AIOPS_OTLP_ENDPOINT is set.
+# 可观测性(架构 §16):仅在设置了 AIOPS_OTLP_ENDPOINT 时才需要。
 otel = [
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
     "temporalio[opentelemetry]>=1.7",
 ]
-# Database access for the Evaluation service (evaluation_runs) and pgvector
-# semantic RAG (knowledge_items). Optional: the mock embedding provider and all
-# unit tests run without a real DB.
+# 供评估服务(evaluation_runs)与 pgvector 语义 RAG(knowledge_items)访问数据库。
+# 属可选依赖:mock embedding provider 与全部单元测试都无需真实数据库即可运行。
 db = [
     "psycopg[binary]>=3.1,<4",
     "pgvector>=0.2,<1",

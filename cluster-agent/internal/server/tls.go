@@ -1,11 +1,10 @@
 package server
 
-// tls.go implements the mTLS server posture from docs/SECURITY.md §3.
+// tls.go 实现 docs/SECURITY.md §3 约定的 mTLS 服务端形态。
 //
-// The Cluster Agent is the TLS server; the Tool Gateway (control-plane) is the
-// client. When enabled, the agent requires and verifies a client certificate
-// signed by the configured client CA (RequireAndVerifyClientCert). When
-// disabled, it stays plaintext for local development.
+// Cluster Agent 是 TLS 服务端,Tool Gateway(控制面)是客户端。启用时,agent 要求
+// 并校验由配置的客户端 CA 签发的客户端证书(RequireAndVerifyClientCert);
+// 未启用时保持明文,便于本地开发。
 
 import (
 	"crypto/tls"
@@ -16,7 +15,7 @@ import (
 	"strings"
 )
 
-// TLSConfig holds the mTLS server settings sourced from AIOPS_AGENT_TLS_*.
+// TLSConfig 保存来自 AIOPS_AGENT_TLS_* 的 mTLS 服务端配置。
 type TLSConfig struct {
 	Enabled  bool
 	CertFile string
@@ -24,12 +23,12 @@ type TLSConfig struct {
 	ClientCA string
 }
 
-// TLSConfigFromEnv reads the mTLS server configuration.
+// TLSConfigFromEnv 读取 mTLS 服务端配置。
 //
-//	AIOPS_AGENT_TLS_ENABLED     enable mTLS (default false)
-//	AIOPS_AGENT_TLS_CERT        server certificate (PEM)
-//	AIOPS_AGENT_TLS_KEY         server private key (PEM)
-//	AIOPS_AGENT_TLS_CLIENT_CA   CA bundle used to verify client certs (PEM)
+//	AIOPS_AGENT_TLS_ENABLED     是否启用 mTLS(默认 false)
+//	AIOPS_AGENT_TLS_CERT        服务端证书(PEM)
+//	AIOPS_AGENT_TLS_KEY         服务端私钥(PEM)
+//	AIOPS_AGENT_TLS_CLIENT_CA   用于校验客户端证书的 CA 包(PEM)
 func TLSConfigFromEnv() TLSConfig {
 	enabled, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("AIOPS_AGENT_TLS_ENABLED")))
 	return TLSConfig{
@@ -40,9 +39,8 @@ func TLSConfigFromEnv() TLSConfig {
 	}
 }
 
-// Build validates the configuration and returns a *tls.Config that requires and
-// verifies client certificates. It returns nil (with nil error) when TLS is
-// disabled, so callers fall back to plaintext ListenAndServe.
+// Build 校验配置并返回要求且校验客户端证书的 *tls.Config。TLS 未启用时返回
+// nil(error 也为 nil),调用方据此回退到明文 ListenAndServe。
 func (c TLSConfig) Build() (*tls.Config, error) {
 	if !c.Enabled {
 		return nil, nil

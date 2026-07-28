@@ -1,8 +1,8 @@
-"""Model Gateway: pluggable model providers (architecture 12.1).
+"""Model Gateway:可插拔的模型 provider(架构 12.1)。
 
-The Agent is not bound to a vendor. ``AIOPS_MODEL_PROVIDER`` selects the
-implementation. ``MockProvider`` is fully deterministic and needs no API key,
-so the whole InvestigationWorkflow runs end-to-end offline.
+Agent 不绑定具体厂商,由 ``AIOPS_MODEL_PROVIDER`` 选择具体实现。
+``MockProvider`` 完全确定性且不需要 API key,因此整条 InvestigationWorkflow
+可以完全离线端到端运行。
 """
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from .mock import MockProvider
 
 
 def build_provider(settings: Settings) -> ModelProvider:
-    """Factory selecting a provider from settings. Imports the Anthropic
-    provider lazily so the ``anthropic`` SDK stays an optional dependency."""
+    """按配置选择 provider 的工厂函数。对 Anthropic provider 采用惰性导入,
+    使 ``anthropic`` SDK 保持为可选依赖。"""
     provider = settings.model_provider
     if provider == "mock":
         return MockProvider()

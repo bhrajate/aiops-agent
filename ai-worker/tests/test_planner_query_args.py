@@ -1,8 +1,7 @@
-"""F1: planner-parameterized tool queries.
+"""F1:由规划器传参的工具查询。
 
-Before this, every observability tool ran the gateway's generic default query,
-so a plan's ``objective`` had no effect on what data was collected. These tests
-pin the new behavior *and* the guardrails around it.
+在此之前,所有可观测性工具都只跑网关的通用默认查询,因此计划中的 ``objective``
+对实际采集到的数据毫无影响。这些测试固定住新行为,**以及**围绕它的各项护栏。
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ def _spec(tools, queries):
 
 
 # --------------------------------------------------------------------------
-# validate_plan sanitization
+# validate_plan 的参数净化
 # --------------------------------------------------------------------------
 
 
@@ -41,8 +40,8 @@ def test_allowed_query_arg_survives():
 
 
 def test_unknown_arg_key_is_dropped_not_fatal():
-    """An unknown key degrades to the gateway default rather than failing the
-    whole plan -- a model typo must not abort a round of evidence collection."""
+    """未知参数键会退化为网关默认值,而不是让整份计划失败 ——
+    模型的一个拼写错误不该中断一整轮证据采集。"""
     plan = validate_plan(
         InvestigationPlan(
             analyzers=[
@@ -94,7 +93,7 @@ def test_oversized_and_nonstring_args_dropped():
 
 
 # --------------------------------------------------------------------------
-# budget clipping must not orphan query args
+# 预算裁剪不得遗留孤立的查询参数
 # --------------------------------------------------------------------------
 
 
@@ -104,12 +103,12 @@ def test_clipping_drops_args_of_clipped_tools():
         tools=["get_traces", "inspect_dependencies"],
         queries={"get_traces": {"service": "auth"}},
     )
-    # Only room for one tool -> inspect_dependencies is cut.
+    # 只够放一个工具 -> inspect_dependencies 被裁掉。
     clipped = _clip_analyzers_to_budget([spec], remaining=1)
     assert clipped[0].tools == ["get_traces"]
     assert clipped[0].args_for("get_traces") == {"service": "auth"}
 
-    # Room for one tool, but the surviving one carries no args.
+    # 仍只够放一个工具,但保留下来的那个本身不带参数。
     spec2 = AnalyzerSpec(
         analyzer=AnalyzerType.TRACES,
         tools=["inspect_dependencies", "get_traces"],
@@ -121,7 +120,7 @@ def test_clipping_drops_args_of_clipped_tools():
 
 
 # --------------------------------------------------------------------------
-# the args actually reach the tool call
+# 参数确实传到了工具调用上
 # --------------------------------------------------------------------------
 
 
@@ -153,13 +152,13 @@ async def test_query_args_reach_invoke_tool(monkeypatch):
     assert out.tool_calls == 1
     tool, args = client.calls[0]
     assert tool == "query_metrics"
-    # The analyzer tag is still present, plus the planner's expression.
+    # 分析器标记依然在,同时带上了规划器给出的表达式。
     assert args["analyzer"] == "metrics"
     assert args["expr"] == "sum(rate(x[5m]))"
 
 
 # --------------------------------------------------------------------------
-# the mock planner exercises the path (so the offline demo is representative)
+# mock 规划器也会走这条路径(使离线演示具有代表性)
 # --------------------------------------------------------------------------
 
 
@@ -186,7 +185,7 @@ async def test_mock_plan_parameterizes_observability_tools():
 
 @pytest.mark.asyncio
 async def test_mock_scenario_table_is_not_mutated_across_calls():
-    """The scenario table is module-level shared state; plans must copy it."""
+    """场景表是模块级共享状态;计划必须复制它而不是直接引用。"""
     provider = MockProvider()
     ctx = IncidentContext(
         incident=Incident(incident_id="inc-1", fault_category="resource_saturation")
@@ -201,7 +200,7 @@ async def test_mock_scenario_table_is_not_mutated_across_calls():
 
 @pytest.mark.asyncio
 async def test_budget_still_bounds_parameterized_plans():
-    """Parameterizing must not change how tool calls are counted."""
+    """传参不应改变工具调用的计数方式。"""
     provider = MockProvider()
     ctx = IncidentContext(
         incident=Incident(incident_id="inc-1", fault_category="release_regression")

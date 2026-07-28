@@ -8,7 +8,7 @@ import (
 
 // 脱敏规则(文档 9.2 / 14.2):对进入模型的内容擦除 Secret/Token/凭据/个人信息。
 var redactPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(bearer\s+)[a-z0-9._\-]+`),                                               // Bearer token
+	regexp.MustCompile(`(?i)(bearer\s+)[a-z0-9._\-]+`),                                               // Bearer 令牌
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)[^\s"']+`),                                      // Authorization
 	regexp.MustCompile(`(?i)((?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)[^\s"',}]+`),     // 凭据键值
 	regexp.MustCompile(`eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+`),                       // JWT

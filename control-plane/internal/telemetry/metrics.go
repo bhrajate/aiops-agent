@@ -10,15 +10,15 @@ import (
 
 // Metrics 汇集控制面核心指标(架构第 16 节)。
 type Metrics struct {
-	SignalsIngested       *prometheus.CounterVec // by source
-	IncidentsCreated      *prometheus.CounterVec // by severity, fault_category
+	SignalsIngested       *prometheus.CounterVec // 按 source 维度
+	IncidentsCreated      *prometheus.CounterVec // 按 severity、fault_category 维度
 	InvestigationsStarted prometheus.Counter
-	ToolInvokes           *prometheus.CounterVec   // by tool, result
-	ToolLatency           *prometheus.HistogramVec // by tool
-	DeadLetters           *prometheus.CounterVec   // by topic
-	AuthDenials           *prometheus.CounterVec   // by reason
-	RetentionPurged       *prometheus.CounterVec   // by target
-	IngressThrottled      *prometheus.CounterVec   // by tenant
+	ToolInvokes           *prometheus.CounterVec   // 按 tool、result 维度
+	ToolLatency           *prometheus.HistogramVec // 按 tool 维度
+	DeadLetters           *prometheus.CounterVec   // 按 topic 维度
+	AuthDenials           *prometheus.CounterVec   // 按 reason 维度
+	RetentionPurged       *prometheus.CounterVec   // 按 target 维度
+	IngressThrottled      *prometheus.CounterVec   // 按 tenant 维度
 	reg                   *prometheus.Registry
 }
 

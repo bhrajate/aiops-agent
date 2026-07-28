@@ -1,7 +1,7 @@
 package datasource
 
-// kubernetes_topology.go: read-only change history (ReplicaSet revisions) and
-// dependency topology (Service selectors) plus shared pod/container helpers.
+// kubernetes_topology.go:只读的变更历史(ReplicaSet 修订版本)与依赖拓扑
+// (Service 选择器),外加共用的 pod/容器辅助函数。
 
 import (
 	"context"
@@ -16,10 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// (helpers below are shared by the read-only Kubernetes query methods)
+// (下面的辅助函数由各只读 Kubernetes 查询方法共用)
 
-// recentChanges derives deploy history from ReplicaSet revisions owned by the
-// Deployment (each revision = one rollout / image change).
+// recentChanges 从该 Deployment 所拥有的 ReplicaSet 修订版本推导发布历史
+// (每个修订版本 = 一次发布 / 镜像变更)。
 func (k *kubeReader) recentChanges(ctx context.Context, scope Scope) (Result, error) {
 	namespace := ns(scope)
 	name := liveResource(scope)
@@ -70,9 +70,9 @@ func (k *kubeReader) recentChanges(ctx context.Context, scope Scope) (Result, er
 	return Result{Source: "change-intel", Summary: summary, Raw: raw, Freshness: "live"}, nil
 }
 
-// dependencies maps the Deployment's pod labels to the Services that select it,
-// yielding upstream edges (Service -> workload). Confidence is medium because
-// Kubernetes Service selectors only express ingress, not the full call graph.
+// dependencies 把 Deployment 的 pod 标签映射到选中它的 Service,得到上游边
+// (Service -> 工作负载)。置信度定为 medium,因为 Kubernetes 的 Service 选择器
+// 只表达入口关系,并不是完整的调用图。
 func (k *kubeReader) dependencies(ctx context.Context, scope Scope) (Result, error) {
 	namespace := ns(scope)
 	name := liveResource(scope)
@@ -123,7 +123,7 @@ func (k *kubeReader) dependencies(ctx context.Context, scope Scope) (Result, err
 	return Result{Source: "topology", Summary: summary, Raw: raw, Freshness: "live"}, nil
 }
 
-// --- shared read-only helpers ---
+// --- 共用的只读辅助函数 ---
 
 func podReadyRestarts(p *corev1.Pod) (ready bool, restarts int32) {
 	for _, c := range p.Status.ContainerStatuses {

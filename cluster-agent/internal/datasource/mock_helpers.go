@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 )
 
-// shortHash produces a deterministic 6-char id fragment from s.
+// shortHash 从 s 生成确定性的 6 字符 id 片段。
 func shortHash(s string) string {
 	sum := sha1.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])[:6]

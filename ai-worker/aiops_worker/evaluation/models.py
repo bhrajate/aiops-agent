@@ -1,8 +1,8 @@
-"""Pydantic models for the Evaluation service.
+"""评估服务使用的 Pydantic 模型。
 
-Aligned with the ``golden_cases`` and ``evaluation_runs`` tables in
-shared/sql/003_hardening.sql. ``signal_fixture`` carries a reproducible input
-(incident stub + signals) so a case replays identically every time.
+与 shared/sql/003_hardening.sql 中的 ``golden_cases`` 和 ``evaluation_runs``
+两张表对齐。``signal_fixture`` 承载可复现的输入(incident 桩 + 信号),
+以保证同一用例每次重放结果完全一致。
 """
 from __future__ import annotations
 
@@ -14,11 +14,10 @@ from ..contracts import IncidentContext
 
 
 class SignalFixture(BaseModel):
-    """Reproducible replay input for one golden case.
+    """单个黄金用例的可复现重放输入。
 
-    Mirrors what the control plane would have stored on the closed incident:
-    the incident stub + its normalised signals. Converted to an
-    :class:`IncidentContext` for replay.
+    对应控制面在已关闭故障单上会保存的内容:incident 桩 + 其归一化后的信号。
+    重放时会被转换为 :class:`IncidentContext`。
     """
 
     model_config = ConfigDict(extra="allow")
@@ -39,10 +38,10 @@ class SignalFixture(BaseModel):
 
 
 class GoldenCase(BaseModel):
-    """A labelled, reviewed case for offline replay (architecture 18.2).
+    """已标注并经评审的离线重放用例(架构 18.2)。
 
-    Only ``review_status == 'approved'`` cases should gate a release; the field
-    is kept so the loader can filter.
+    只有 ``review_status == 'approved'`` 的用例才应参与发布卡点;保留该字段
+    以便加载器过滤。
     """
 
     model_config = ConfigDict(extra="allow")
@@ -59,8 +58,8 @@ class GoldenCase(BaseModel):
     @field_validator("expected_top_causes")
     @classmethod
     def _at_least_one_expected(cls, v: list[str]) -> list[str]:
-        # A golden case must assert what "hitting the root cause" means, else
-        # hit-rate is undefined. Empty expected_top_causes is a contract error.
+        # 黄金用例必须明确「命中根因」的判定标准,否则命中率无从定义。
+        # expected_top_causes 为空属于契约错误。
         cleaned = [s for s in (x.strip() for x in v) if s]
         if not cleaned:
             raise ValueError("expected_top_causes must contain >=1 keyword")
@@ -68,17 +67,17 @@ class GoldenCase(BaseModel):
 
 
 class EvaluationResult(BaseModel):
-    """Per-case replay outcome + scoring."""
+    """单个用例的重放结果与评分。"""
 
     model_config = ConfigDict(extra="allow")
     case_id: str
     fault_category: str
     diagnosis_status: str
-    predicted_causes: list[str] = Field(default_factory=list)  # ranked statements
+    predicted_causes: list[str] = Field(default_factory=list)  # 按排名排列的结论陈述
     matched_keyword: Optional[str] = None
     top1_hit: bool = False
     top3_hit: bool = False
-    # Key-conclusion (supported hypothesis) evidence bookkeeping.
+    # 关键结论(即 supported 假设)的证据记账。
     supported_conclusions: int = 0
     supported_with_evidence: int = 0
     unsupported_root_causes: int = 0
@@ -87,7 +86,7 @@ class EvaluationResult(BaseModel):
 
 
 class EvaluationRunSummary(BaseModel):
-    """Aggregate metrics for one evaluation run -> ``evaluation_runs`` row."""
+    """一次评估运行的聚合指标 -> 对应 ``evaluation_runs`` 表的一行。"""
 
     model_config = ConfigDict(extra="allow")
     run_id: Optional[str] = None

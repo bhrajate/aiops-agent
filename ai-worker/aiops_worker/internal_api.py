@@ -1,10 +1,9 @@
-"""Async HTTP client for the control-plane internal API (`:8090`).
+"""控制面内部 API(`:8090`)的异步 HTTP 客户端。
 
-The AI worker NEVER touches the database. It reads context and writes back
-phase/events/hypotheses/diagnosis/usage exclusively through these endpoints
-(docs/INTEGRATION.md "内部 API"). Tool invocation is also proxied here: the
-gateway injects scope, validates authz, calls cluster-agent, redacts, then
-persists and returns an Evidence record.
+AI worker **绝不**直连数据库。它只通过这些端点读取上下文,并回写
+phase/events/hypotheses/diagnosis/usage(docs/INTEGRATION.md「内部 API」)。
+工具调用同样在此代理:网关注入 scope、校验授权、调用 cluster-agent、脱敏,
+然后持久化并返回一条 Evidence 记录。
 """
 from __future__ import annotations
 
@@ -22,10 +21,9 @@ from .contracts import (
 
 
 class ToolDenied(Exception):
-    """Raised when the gateway denies a tool invocation (policy/authz).
+    """网关拒绝某次工具调用(策略 / 授权原因)时抛出。
 
-    The denial reason is structured data, not something the model can rewrite
-    to bypass (architecture 9.2 / 14.2)."""
+    拒绝原因是结构化数据,而不是模型可以改写以绕过的东西(架构 9.2 / 14.2)。"""
 
     def __init__(self, tool: str, reason: str):
         super().__init__(f"tool {tool!r} denied: {reason}")
@@ -58,7 +56,7 @@ class InternalAPIClient:
         data = await self._get(f"/internal/investigations/{investigation_id}/context")
         return IncidentContext.model_validate(data)
 
-    # -- tool invocation (proxied to gateway -> cluster-agent) ---------------
+    # -- 工具调用(代理到 gateway -> cluster-agent) --------------------------
 
     async def invoke_tool(
         self,
@@ -95,9 +93,8 @@ class InternalAPIClient:
         payload: dict[str, Any],
         idempotency_key: str = "",
     ) -> None:
-        # ``idempotency_key`` lets the control plane dedupe events replayed by
-        # Temporal activity retries (same logical event -> same key). If the
-        # control plane does not yet dedupe, the field is harmless.
+        # ``idempotency_key`` 让控制面能对 Temporal activity 重试所导致的重复事件
+        # 去重(同一逻辑事件 -> 同一 key)。若控制面尚未实现去重,该字段也无副作用。
         body: dict[str, Any] = {"event_type": event_type, "payload": payload}
         if idempotency_key:
             body["idempotency_key"] = idempotency_key
@@ -109,7 +106,7 @@ class InternalAPIClient:
     async def put_hypotheses(
         self, investigation_id: str, hypotheses: list[Hypothesis]
     ) -> None:
-        # Full replacement (docs/INTEGRATION.md).
+        # 整体替换(docs/INTEGRATION.md)。
         await self._post(
             f"/internal/investigations/{investigation_id}/hypotheses",
             {"hypotheses": [h.model_dump(mode="json") for h in hypotheses]},

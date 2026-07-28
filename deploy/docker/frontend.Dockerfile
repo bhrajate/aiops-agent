@@ -6,7 +6,7 @@
 # 运行时 nginx 站点配置由 K8s ConfigMap(frontend-nginx)挂载覆盖 /etc/nginx/conf.d,
 # 镜像内置一份等价默认配置,便于 docker 直跑。
 
-# ---- build stage ----
+# ---- 构建阶段 ----
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -14,7 +14,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# ---- runtime stage ----
+# ---- 运行阶段 ----
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 # 非 root(镜像默认 UID 101),监听 8080。
 COPY --from=build /app/dist /usr/share/nginx/html

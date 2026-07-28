@@ -1,11 +1,10 @@
 package datasource
 
-// kubernetes.go: read-only Kubernetes access via client-go.
+// kubernetes.go:通过 client-go 进行只读 Kubernetes 访问。
 //
-// READ-ONLY: this file only ever calls Get / List on the typed clientset.
-// It never calls Create/Update/Patch/Delete or any exec/attach/portforward
-// subresource, and it never wraps a write verb. The rest.Config is used
-// solely to build a read client.
+// **只读**:本文件只会在强类型 clientset 上调用 Get / List,绝不调用
+// Create/Update/Patch/Delete,也不触碰 exec/attach/portforward 等子资源,
+// 更不会包装任何写动词。rest.Config 仅用于构建只读客户端。
 
 import (
 	"fmt"
@@ -17,24 +16,22 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-// kubeReader wraps a read-only Kubernetes clientset. The field type is the
-// interface so tests can inject a fake clientset.
+// kubeReader 包装一个只读的 Kubernetes clientset。字段类型取接口,便于测试注入
+// fake clientset。
 type kubeReader struct {
 	client kubernetes.Interface
 }
 
-// newKubeReader builds a read client from (in order): explicit kubeconfig path,
-// in-cluster config, then the default ~/.kube/config. It returns an error when
-// no usable config exists, letting the caller degrade gracefully.
+// newKubeReader 按以下顺序构建只读客户端:显式 kubeconfig 路径、集群内配置、
+// 默认的 ~/.kube/config。若没有可用配置则返回 error,让调用方优雅降级。
 func newKubeReader(kubeconfig string) (*kubeReader, error) {
 	cfg, err := restConfig(kubeconfig)
 	if err != nil {
 		return nil, err
 	}
-	// Defensive read-only posture: no write verbs are ever issued regardless,
-	// but we also keep QPS modest since this is a query-only client. Explicit
-	// QPS/Burst caps the client-side rate so the agent cannot storm the API
-	// server (defense-in-depth), instead of relying on client-go's defaults.
+	// 防御性的只读姿态:无论如何都不会发出写动词,同时由于这是纯查询客户端,
+	// QPS 也保持在温和水平。显式设置 QPS/Burst 是在客户端侧限速,避免 agent 冲垮
+	// API Server(纵深防御),而不是依赖 client-go 的默认值。
 	cfg.QPS = 20
 	cfg.Burst = 40
 	cs, err := kubernetes.NewForConfig(cfg)
@@ -44,7 +41,7 @@ func newKubeReader(kubeconfig string) (*kubeReader, error) {
 	return &kubeReader{client: cs}, nil
 }
 
-// newKubeReaderWithClient is the test seam for fake clientsets.
+// newKubeReaderWithClient 是给 fake clientset 预留的测试注入点。
 func newKubeReaderWithClient(c kubernetes.Interface) *kubeReader {
 	return &kubeReader{client: c}
 }

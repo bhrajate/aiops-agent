@@ -25,7 +25,7 @@ fmt-check:
 tidy:
 	go mod tidy
 
-# Aggregate gate matching the project acceptance criteria.
+# 对齐项目验收标准的聚合门禁。
 check: fmt-check vet build test
 
 docker:

@@ -54,7 +54,7 @@ var evidenceType = map[string]string{
 var toolArgKeys = map[string][]string{
 	"query_metrics": {"expr"},    // PromQL
 	"search_logs":   {"query"},   // LogQL
-	"get_traces":    {"service"}, // service.name tag
+	"get_traces":    {"service"}, // 对应 service.name 标签
 }
 
 // maxToolArgLen 单个调用方参数值上限,防止超长表达式打到后端。

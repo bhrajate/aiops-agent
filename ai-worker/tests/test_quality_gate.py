@@ -1,8 +1,7 @@
-"""F8: the release quality gates must actually fail on regression.
+"""F8:发布质量闸门必须在出现回归时真的判为失败。
 
-The gates existed but were never wired into CI, and were never tested — an
-untested guardrail is indistinguishable from no guardrail. Each gate is checked
-independently so one failing gate can't be masked by another.
+这些闸门此前虽然存在,但既没接入 CI,也从未被测试过 —— 未经测试的护栏与没有护栏
+无从区分。每个闸门都独立检查,避免一个失败的闸门被另一个掩盖。
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ GATE_P95 = "p95_first_diag<300s"
 
 
 def _summary(**over) -> EvaluationRunSummary:
-    """A run that passes every gate; override one field to break one gate."""
+    """一次能通过所有闸门的运行;覆写其中某个字段即可单独打破某一个闸门。"""
     base = dict(
         total_cases=10,
         top1_hits=8,

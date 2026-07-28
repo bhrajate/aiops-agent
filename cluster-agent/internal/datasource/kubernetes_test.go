@@ -123,7 +123,7 @@ func TestKubeRecentChangesRevisionOrder(t *testing.T) {
 	if len(changes) != 2 {
 		t.Fatalf("expected 2 revisions, got %d", len(changes))
 	}
-	// Newest revision (2) first, carrying the v2.3.0 image.
+	// 最新修订版本(2)排在最前,携带 v2.3.0 镜像。
 	if changes[0]["revision"].(int) != 2 {
 		t.Errorf("first revision = %v, want 2", changes[0]["revision"])
 	}
@@ -148,7 +148,7 @@ func TestKubeDependenciesMatchService(t *testing.T) {
 }
 
 func TestKubeWorkloadStateNotFound(t *testing.T) {
-	// Empty clientset: the Deployment does not exist -> unavailable, not error.
+	// 空 clientset:Deployment 不存在 -> 返回 unavailable,而不是 error。
 	kr := newKubeReaderWithClient(fake.NewSimpleClientset())
 	res, err := kr.workloadState(context.Background(), liveScope())
 	if err != nil {
@@ -174,7 +174,7 @@ func TestKubeDependenciesNotFound(t *testing.T) {
 }
 
 func TestKubeConformsToDataSourceViaLive(t *testing.T) {
-	// Ensure the fake-backed reader plugs into Live and the interface holds.
+	// 确认基于 fake 的 reader 能接入 Live,且接口约定成立。
 	l := &Live{kube: fakeReader(), now: time.Now}
 	var _ DataSource = l
 	if _, err := l.GetWorkloadState(context.Background(), liveScope(), nil); err != nil {

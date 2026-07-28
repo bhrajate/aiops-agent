@@ -1,7 +1,7 @@
-"""Optional DB integration tests (pgvector RAG + evaluation_runs writer).
+"""可选的数据库集成测试(pgvector RAG + evaluation_runs 写入)。
 
-Skipped unless a reachable Postgres is configured via ``AIOPS_DB_DSN`` and the
-``db`` extra (psycopg) is installed. Local dev DSN (docs/INTEGRATION.md):
+除非通过 ``AIOPS_DB_DSN`` 配置了可访问的 Postgres 且安装了 ``db`` extra(psycopg),
+否则这些测试会被跳过。本地开发用 DSN(docs/INTEGRATION.md):
     AIOPS_DB_DSN=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
 """
 from __future__ import annotations
@@ -51,9 +51,9 @@ def test_reindex_and_search_roundtrip():
 
     hits = store.search("发布回归 依赖 超时", top_k=3)
     assert hits
-    # Best hit should be the release/dependency runbook, not an unrelated one.
+    # 最佳命中应当是发布/依赖类 runbook,而不是某个无关条目。
     assert "发布" in hits[0].title or "依赖" in hits[0].title
-    # Cosine distance is ordered ascending.
+    # 余弦距离按升序排列。
     dists = [h.distance for h in hits]
     assert dists == sorted(dists)
 
@@ -87,7 +87,7 @@ def test_load_golden_cases_from_db():
     from aiops_worker.evaluation.store import load_golden_cases_from_db
 
     cases = load_golden_cases_from_db(dsn=DSN)
-    # Only meaningful if the 004 seed was applied; otherwise skip.
+    # 只有应用了 004 seed 数据才有意义;否则跳过。
     if not cases:
         pytest.skip("golden_cases table empty (apply 004_seed_golden_cases.sql)")
     for c in cases:

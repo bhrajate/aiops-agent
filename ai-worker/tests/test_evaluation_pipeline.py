@@ -1,4 +1,4 @@
-"""Golden-case contract validation + end-to-end offline replay (no Temporal)."""
+"""黄金用例的契约校验,以及端到端离线重放(不依赖 Temporal)。"""
 from __future__ import annotations
 
 import pytest
@@ -18,7 +18,7 @@ def test_seed_cases_load_and_validate():
     assert len(cases) == 5
     for c in cases:
         assert isinstance(c, GoldenCase)
-        assert c.expected_top_causes  # contract: >=1 keyword
+        assert c.expected_top_causes  # 契约要求:至少 1 个关键词
 
 
 def test_seed_cases_cover_four_fault_classes():
@@ -48,13 +48,13 @@ def test_fixture_converts_to_context():
     c = load_seed_cases()[0]
     ctx = c.signal_fixture.to_context()
     assert ctx.incident.incident_id == "inc-release-001"
-    assert ctx.signals  # signals carried through
+    assert ctx.signals  # 信号已完整传递下来
 
 
 async def test_end_to_end_replay_all_cases_hit_top1():
     cases = load_seed_cases()
     summary = await run_evaluation(cases)
-    # MockProvider is scenario-aware -> every seed case should resolve + hit.
+    # MockProvider 能识别场景 -> 每个 seed 用例都应得出结论并命中根因。
     assert summary.total_cases == 5
     assert summary.top1_hits == 5
     assert summary.top3_hits == 5
@@ -71,7 +71,7 @@ async def test_end_to_end_gates_pass():
 
 async def test_supported_conclusions_cite_realtime_evidence():
     summary = await run_evaluation(load_seed_cases())
-    # Every asserted root cause must reference a real-time evidence id.
+    # 每一条被断言的根因都必须引用实时证据 id。
     assert summary.detail["supported_conclusions"] >= 5
     assert summary.detail["unsupported_root_causes"] == 0
 
@@ -79,14 +79,14 @@ async def test_supported_conclusions_cite_realtime_evidence():
 async def test_replay_is_deterministic():
     a = await run_evaluation(load_seed_cases())
     b = await run_evaluation(load_seed_cases())
-    # Scoring (excluding wall-clock latency) is identical across runs.
+    # 除墙钟耗时外,多次运行的评分结果完全一致。
     da = [r.model_dump(exclude={"first_diag_sec"}) for r in a.results]
     db = [r.model_dump(exclude={"first_diag_sec"}) for r in b.results]
     assert da == db
 
 
 async def test_no_deep_rca_when_low_severity_no_change():
-    # P4, no change, single service/namespace, unknown category -> triage-only.
+    # P4、无变更、单服务单命名空间、类别未知 -> 只做初判。
     case = GoldenCase(
         case_id="gc-triage-only", fault_category="config_error",
         root_cause="x", expected_top_causes=["配置"],
@@ -101,6 +101,6 @@ async def test_no_deep_rca_when_low_severity_no_change():
         ),
     )
     summary = await run_evaluation([case])
-    # Triage recommends deep RCA only for known scenarios; unknown + P4 -> no.
+    # 初判只对已知场景建议做深度 RCA;类别未知 + P4 -> 不建议。
     r = summary.results[0]
     assert r.notes == "escalated"
