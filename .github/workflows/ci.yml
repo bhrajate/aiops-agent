@@ -107,6 +107,11 @@ jobs:
 
       # 前端:只在 high/critical 上失败。moderate 大多来自构建期传递依赖,
       # 卡在那一档会让 CI 长期红着,反而没人看告警。
+      #
+      # audit 必须显式指向官方 registry:frontend/.npmrc 把 registry 设为
+      # npmmirror(装包加速),而该镜像未实现 /-/npm/v1/security/* 端点,audit
+      # 会拿到 404 NOT_IMPLEMENTED 并以 exit 1 失败。装包仍走镜像,只有查漏洞
+      # 库这一步回官方源——漏洞数据只来自 registry,不影响 lockfile 解析。
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -116,7 +121,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npm audit --audit-level=high
+          npm audit --registry=https://registry.npmjs.org --audit-level=high
 
       # Python:pip-audit 查 PyPI 已知漏洞。
       - name: Install uv
