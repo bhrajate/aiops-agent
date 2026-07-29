@@ -241,6 +241,46 @@ SELECT investigation_id, usage->>'rounds' AS rounds,
 注意限流是**进程内**的,每副本独立配额,集群总容量 = 配置值 × 副本数。
 排查时不要用单副本配额去推算集群容量。
 
+### 调查长期停在 waiting_feedback
+
+无对应告警(它不是故障,而是**在等人**)。但需要区分两种情形,处置完全不同。
+
+**正常等待。** 调查已发布诊断结论,在等人工反馈,最长 48h
+(`_FEEDBACK_TIMEOUT`)。到点自动转 `closed`,并落账用量。无需处置 ——
+业务库仍是事实源,人工随时可以重新打开。
+
+**异常卡死(用量未落账)。** 若 `investigations.usage` 缺失或明显偏小,
+说明工作流没走完 CLOSED 迁移。最常见成因是 **run timeout 被配小**:
+
+`AIOPS_TEMPORAL_RUN_TIMEOUT_SEC` 到点是 Temporal **硬终止** ——
+不执行 CLOSED 迁移、不 flush 用量。若它小于 48h,一条正在**正常等待人工**的调查
+会被掐掉,永久停在 `waiting_feedback`。
+
+控制面启动时会拒绝这类配置(下限 60h = 48h + 12h 收尾余量),
+因此**运行中的实例不会有这个问题**。但历史上用旧版本(无校验)跑过的环境可能留下
+这类记录。识别方法:
+
+```sql
+SELECT investigation_id, phase, started_at, usage
+  FROM investigations
+ WHERE phase = 'waiting_feedback'
+   AND ended_at IS NULL
+   AND started_at < now() - interval '49 hours'
+ ORDER BY started_at;
+```
+
+用 `started_at` 而非阶段进入时间 —— 表上没有后者,但这不影响判断:
+整条调查的工作部分受 `Budget.max_duration_sec`(默认 300s)约束,
+之后最长再等 48h,所以 `started_at` 超过 49h 且 `ended_at` 为空即为异常。
+逐条的阶段迁移时间在 `investigation_events` 里(`event_type = 'phase_changed'`)。
+
+在 Temporal UI 里按 `investigation/{incident}/{version}` 查对应 run,
+若状态为 `TIMED_OUT` 即可确认。这类记录**只能人工关闭** ——
+不要试图重启工作流,那会用同一 workflow id 重跑一次完整调查并重复计费。
+
+改配置时切记:这个值**不是**调查时长上限。调查时长由
+`Budget.max_duration_sec`(默认 300s)控制,两者相差三个数量级,不要混淆。
+
 ## 验收清单
 
 对照 [`生产级AIOps-Agent架构设计.md`](生产级AIOps-Agent架构设计.md) 第 22 节。落地情况见 [`ACCEPTANCE.md`](ACCEPTANCE.md)。

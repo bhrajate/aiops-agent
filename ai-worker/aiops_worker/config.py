@@ -29,8 +29,18 @@ class Settings:
     # 内部 API 客户端的 HTTP 超时(秒)。
     http_timeout_sec: float = float(os.environ.get("AIOPS_HTTP_TIMEOUT_SEC", "15"))
 
-    # 分析器并发上限(架构文档 8.4)。
-    max_analyzer_concurrency: int = int(os.environ.get("AIOPS_MAX_ANALYZER_CONCURRENCY", "3"))
+    # 单个 worker 并发执行的 activity 上限(架构文档 8.4)。它同时也是并发模型
+    # 调用的上限 —— 一轮最多 5 个分析器并行,多条调查叠加时这是唯一的闸门。
+    #
+    # 为什么设在 worker 层而不是工作流里用 semaphore:被这个上限挡住的 activity
+    # 处于「未开始」状态,start_to_close 计时还没启动;而 semaphore 是在 activity
+    # **内部**等待,计时已经在跑 —— 排队久了会把正常任务拖成超时。
+    #
+    # 下限不能太低:record_phase / record_event 这类 I/O activity 与模型 activity
+    # 共享槽位,若被长时间占满会撞上它们 30s 的超时并触发重试。
+    max_concurrent_activities: int = int(
+        os.environ.get("AIOPS_MAX_CONCURRENT_ACTIVITIES", "16")
+    )
 
     # 内部 API 共享密钥(SECURITY §2),通过 X-Internal-Token 头发送。
     internal_token: str = os.environ.get("AIOPS_INTERNAL_TOKEN", "")

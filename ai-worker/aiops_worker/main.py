@@ -49,6 +49,7 @@ async def run_worker() -> None:
         client,
         task_queue=settings.task_queue,
         interceptors=interceptors,
+        max_concurrent_activities=settings.max_concurrent_activities,
         workflows=[InvestigationWorkflow],
         activities=[
             acts.load_incident_context,

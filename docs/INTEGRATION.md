@@ -96,6 +96,15 @@ AIOPS_DB_DSN=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
 AIOPS_KAFKA_BROKERS=localhost:19092
 AIOPS_TEMPORAL_HOSTPORT=localhost:7233
 AIOPS_TEMPORAL_NAMESPACE=default
+# 单个 Workflow run 的墙钟硬上限(默认 7 天)。**不是**调查时长上限 ——
+# 那由 Budget.max_duration_sec(默认 300s)管。这一项只兜「run 异常挂死」。
+#
+# 下限 216000 秒(60h),控制面启动时校验,配小了直接拒绝启动:
+# run timeout 到点是服务端**硬终止**,不执行 CLOSED 迁移、不落账用量。
+# Worker 最长等待人工反馈 48h,若 run timeout 小于它,一条正在**正常等待人工**
+# 的调查会被掐掉,库里永久停在 waiting_feedback 且用量永不落账 ——
+# 那比完全不设 run timeout 更糟。60h = 48h + 12h 收尾余量。
+AIOPS_TEMPORAL_RUN_TIMEOUT_SEC=604800
 AIOPS_S3_ENDPOINT=http://localhost:9000
 AIOPS_S3_BUCKET=aiops-evidence
 AIOPS_S3_ACCESS_KEY=minioadmin
@@ -255,4 +264,36 @@ AIOPS_CONTROL_INTERNAL_URL=http://localhost:8090
 AIOPS_MODEL_PROVIDER=mock            # mock | anthropic
 AIOPS_ANTHROPIC_API_KEY=             # 切 anthropic 时填
 AIOPS_ANTHROPIC_MODEL=claude-opus-4-8[1M]
+AIOPS_HTTP_TIMEOUT_SEC=15            # 内部 API 单次往返超时
+# Worker 并发 activity 上限,同时也是**并发模型调用**上限:一轮最多 5 个分析器
+# 并行,多条调查叠加时这是唯一的闸门。
+#
+# 为什么设在 Worker 层而不是工作流里用 semaphore:被这个上限挡住的 activity
+# 处于「未开始」状态,start_to_close 计时还没启动;semaphore 是在 activity
+# **内部**等待,计时已经在跑 —— 排队久了会把正常任务拖成超时。
+#
+# 不要配太低:record_phase / record_event 这类记账 activity 与模型 activity
+# 共享槽位,被长时间占满会撞上它们 30s 的超时并触发重试。
+AIOPS_MAX_CONCURRENT_ACTIVITIES=16
 ```
+
+### Activity 超时与心跳
+
+| 类别 | start_to_close | heartbeat | 说明 |
+|---|---|---|---|
+| 模型类(triage / plan / analyze / synthesize) | 180s | 30s | 见下 |
+| 记账类(record_phase / record_event / record_usage) | 30s | — | 一次内部 HTTP 写入 |
+
+模型类取 180s 的依据:`run_analyzer` 是**串行**工具调用后再接一次模型调用 ——
+单个工具往返最长 `AIOPS_HTTP_TIMEOUT_SEC`(15s),一个分析器最多 2 个工具即 30s,
+之后 reasoning 模型本身可能再花 60s+。原先的 90s 会把一次**正常但缓慢**的分析
+判成超时并重试,那才是真正白烧三倍 token 的路径。这不会让调查跑更久:
+`Budget.max_duration_sec`(默认 300s)会先兜住。
+
+心跳窗口 30s、activity 侧每 5s 心跳一次(6 倍余量,吸收 GC 抖动与 SDK 心跳节流)。
+作用是把「worker 被 OOM kill」的发现时间从最长 180s 压到 30s 量级。
+
+模型调用是**单次不可分割的 await**,中途没有天然落点可以心跳,因此用
+`heartbeat_while` 起并发任务覆盖整个等待期。这一点是必须的:设了
+`heartbeat_timeout` 却没人按时心跳,Temporal 会把正常推理判成失联并重试 ——
+比不设心跳更糟。

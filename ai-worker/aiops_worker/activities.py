@@ -13,7 +13,8 @@
 """
 from __future__ import annotations
 
-from typing import Optional
+import asyncio
+from typing import Awaitable, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from temporalio import activity
@@ -39,6 +40,43 @@ from .policy import (
     enforce_evidence_grounding,
     evaluate_deep_rca_policy,
 )
+
+# ---------------------------------------------------------------------------
+# 心跳:让「worker 猝死」在秒级被发现,而不是等 start_to_close 超时
+# ---------------------------------------------------------------------------
+
+_T = TypeVar("_T")
+
+# 心跳间隔。必须**显著小于**工作流侧设置的 heartbeat_timeout,否则正常运行的
+# activity 会被误判为失联。见 workflow.py 的 _HEARTBEAT_TIMEOUT。
+HEARTBEAT_INTERVAL_SEC = 5.0
+
+
+async def heartbeat_while(coro: Awaitable[_T], interval: float = HEARTBEAT_INTERVAL_SEC) -> _T:
+    """在等待 ``coro`` 期间周期性发送心跳,并原样返回它的结果。
+
+    为什么需要这个包装:模型调用是**单次不可分割的 await**,中途没有天然的
+    落点可以调 ``activity.heartbeat()``。而一旦工作流侧设了 ``heartbeat_timeout``
+    却没人按时心跳,Temporal 就会把一次**正常但缓慢**的推理判定为失联并重试 ——
+    那比不设心跳更糟(白烧一次完整的模型调用)。所以心跳必须覆盖整个等待期,
+    这里用一个并发任务来做。
+
+    取消语义:外层取消(工作流取消 / activity 超时)会传导到 ``task``,
+    与不加包装时的行为一致。
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=interval)
+            if done:
+                return task.result()
+            # 只在真正的 activity 上下文里心跳;单测直接调用 activity 时跳过。
+            if activity.in_activity():
+                activity.heartbeat()
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+
 
 # ---------------------------------------------------------------------------
 # Activity 的入参 / 出参信封
@@ -173,7 +211,7 @@ class InvestigationActivities:
 
     @activity.defn
     async def run_quick_triage(self, arg: TriageInput) -> TriageOutput:
-        triage, usage = await self._provider.quick_triage(arg.context)
+        triage, usage = await heartbeat_while(self._provider.quick_triage(arg.context))
         return TriageOutput(triage=triage, usage=usage)
 
     # -- 深度 RCA 策略(**确定性**判断,不交给 LLM) ---------------------------
@@ -186,15 +224,19 @@ class InvestigationActivities:
 
     @activity.defn
     async def build_investigation_plan(self, arg: PlanInput) -> PlanOutput:
-        plan, usage = await self._provider.build_plan(arg.context, arg.triage)
+        plan, usage = await heartbeat_while(
+            self._provider.build_plan(arg.context, arg.triage)
+        )
         # 强制白名单:规划器只能挑选被许可的分析器 / 工具。
         plan = validate_plan(plan)
         return PlanOutput(plan=plan, usage=usage)
 
     @activity.defn
     async def build_supplemental_plan(self, arg: PlanInput) -> PlanOutput:
-        plan, usage = await self._provider.build_plan(
-            arg.context, arg.triage, supplemental_from=arg.supplemental_from
+        plan, usage = await heartbeat_while(
+            self._provider.build_plan(
+                arg.context, arg.triage, supplemental_from=arg.supplemental_from
+            )
         )
         plan = validate_plan(plan)
         return PlanOutput(plan=plan, usage=usage)
@@ -243,6 +285,10 @@ class InvestigationActivities:
                 # 纵深防御:跳过一切超出该分析器授权范围的工具。
                 denied.append(tool)
                 continue
+            # 工具调用之间是天然的心跳落点:每次工具往返最长 http_timeout_sec,
+            # 串行多个工具时若不心跳,会在这里静默耗掉整个心跳窗口。
+            if activity.in_activity():
+                activity.heartbeat()
             tool_calls += 1
             # 规划器传入的查询参数(已由 validate_plan 净化)让该分析器可以提出
             # **具体**的问题,而不必退回网关的通用默认值。但 scope 没有商量空间:
@@ -261,7 +307,9 @@ class InvestigationActivities:
             except ToolDenied as exc:
                 denied.append(exc.tool)
 
-        result, usage = await self._provider.analyze(arg.context, arg.spec, evidences)
+        result, usage = await heartbeat_while(
+            self._provider.analyze(arg.context, arg.spec, evidences)
+        )
         return RunAnalyzerOutput(
             result=result,
             evidences=evidences,
@@ -274,8 +322,10 @@ class InvestigationActivities:
 
     @activity.defn
     async def synthesize_hypotheses(self, arg: SynthesizeInput) -> SynthesizeOutput:
-        synthesis, usage = await self._provider.synthesize(
-            arg.context, arg.evidences, arg.analyzer_results, arg.round_index
+        synthesis, usage = await heartbeat_while(
+            self._provider.synthesize(
+                arg.context, arg.evidences, arg.analyzer_results, arg.round_index
+            )
         )
         # 证据优先不变式,在**落库之前**强制执行,这样业务库(事实源)里绝不会
         # 存在没有实时证据支撑却被断言的根因。该过程是确定性的 —— 见 policy.py。

@@ -34,6 +34,9 @@ services:
       AIOPS_KAFKA_BROKERS: redpanda:29092
       AIOPS_TEMPORAL_HOSTPORT: temporal:7233
       AIOPS_TEMPORAL_NAMESPACE: default
+      # Workflow run 墙钟硬上限(7 天)。**不是**调查时长上限(Budget 管那个)。
+      # 下限 60h,控制面启动时校验:Worker 最长等待人工反馈 48h。
+      AIOPS_TEMPORAL_RUN_TIMEOUT_SEC: ${AIOPS_TEMPORAL_RUN_TIMEOUT_SEC:-604800}
       AIOPS_S3_ENDPOINT: http://minio:9000
       AIOPS_S3_BUCKET: aiops-evidence
       AIOPS_S3_ACCESS_KEY: ${AIOPS_S3_ACCESS_KEY:-minioadmin}
@@ -101,6 +104,8 @@ services:
       AIOPS_MODEL_PROVIDER: ${AIOPS_MODEL_PROVIDER:-mock}
       AIOPS_ANTHROPIC_API_KEY: ${AIOPS_ANTHROPIC_API_KEY:-}
       AIOPS_ANTHROPIC_MODEL: ${AIOPS_ANTHROPIC_MODEL:-claude-opus-4-8[1M]}
+      # 并发 activity 上限 = 并发模型调用上限。见 docs/INTEGRATION.md。
+      AIOPS_MAX_CONCURRENT_ACTIVITIES: ${AIOPS_MAX_CONCURRENT_ACTIVITIES:-16}
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

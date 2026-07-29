@@ -87,8 +87,19 @@ func main() {
 		trigger.WorkflowStarter
 		api.Signaler
 	}
-	tc, terr := temporalx.Dial(cfg.TemporalHostPort, cfg.TemporalNS, cfg.TemporalQueue)
+	runTimeout := time.Duration(cfg.TemporalRunTimeoutSec) * time.Second
+	tc, terr := temporalx.Dial(cfg.TemporalHostPort, cfg.TemporalNS, cfg.TemporalQueue, runTimeout)
 	if terr != nil {
+		// 区分两类失败:连不上是可降级的运行时状况;配置非法不是 —— 降级会让
+		// 运维只看到一条 warn,而工作流永远不启动,日志里也看不出是配错了。
+		//
+		// 正常路径上 cfg.Validate() 已经先拦住已知的配置问题(那里能一次报出
+		// 全部问题,且不产生任何 I/O)。这里是**兜底**:temporalx 日后新增的任何
+		// 配置校验都自动走 fail-fast,而不是被降级路径静默吞掉。
+		if errors.Is(terr, temporalx.ErrConfig) {
+			log.Error("invalid temporal configuration", "err", terr)
+			os.Exit(1)
+		}
 		log.Warn("temporal unavailable, running degraded (investigations persist but workflows won't start)", "err", terr)
 		wf = temporalx.Noop{}
 	} else {

@@ -14,6 +14,11 @@ data:
   AIOPS_TEMPORAL_NAMESPACE: {{ .Values.config.temporalNamespace | quote }}
   AIOPS_TEMPORAL_QUEUE: {{ .Values.config.temporalQueue | quote }}
   AIOPS_TASK_QUEUE: {{ .Values.config.temporalQueue | quote }}
+  # 单个 Workflow run 的墙钟硬上限。不是调查时长上限(那由 Budget 管),而是
+  # 异常挂死的 run 的回收兜底。下限 60h:Worker 最长等待人工反馈 48h,配小了
+  # 控制面会拒绝启动而不是静默截断。
+  AIOPS_TEMPORAL_RUN_TIMEOUT_SEC: {{ .Values.config.temporalRunTimeoutSec | quote }}
+  AIOPS_MAX_CONCURRENT_ACTIVITIES: {{ .Values.config.maxConcurrentActivities | quote }}
   AIOPS_S3_ENDPOINT: {{ .Values.config.s3Endpoint | quote }}
   AIOPS_S3_BUCKET: {{ .Values.config.s3Bucket | quote }}
   AIOPS_CLUSTER_AGENT_URL: {{ include "aiops.clusterAgentUrl" . | quote }}

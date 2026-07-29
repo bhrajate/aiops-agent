@@ -1021,3 +1021,217 @@ SLI 定义任一条非法即**整体**拒绝启动:部分生效会让运维以�
    `count(traces_service_graph_request_total)`。
 3. **SLI 定义**。只有部署方知道"什么算错误请求"。未提供则 SLO 监视不做任何事
    (启动时会告警)。
+
+# 第七轮:Temporal 编排层的五条评审意见(逐条核实后择改)
+
+外部评审提了五条。核实后 **2 条成立、1 条部分成立、2 条前提有误**。
+本轮的价值一半在改动,一半在**否掉两条**并留下否掉的依据 ——
+按错误前提改代码,会把一个不存在的问题"修"成真问题。
+
+| # | 评审断言 | 核实结论 | 处置 |
+|---|---|---|---|
+| 1 | activity 无 heartbeat | ✅ 成立,但实质问题是 90s 本身 | 已改 |
+| 2 | 确定性错误白重试烧 3 倍 token | ⚠️ 举的三个例子都已被处理 | 不改,记录依据 |
+| 3 | 无 continue_as_new | ✅ 成立,"暂不需要"的判断也对 | 不改 |
+| 4 | summary 内联有撞载荷上限风险 | ❌ 前提两处有误,实测占 1.79% | 不改;但查出真问题两处 |
+| 5 | 控制面没设 WorkflowRunTimeout | ✅ 事实成立,但按建议改会更糟 | 已改,加了下限校验 |
+
+## 1) 模型 activity 超时 90s → 180s + 心跳(已闭合)
+
+评审说"90s 内 worker 被 OOM kill 要等超时才发现"——对。但更要紧的是
+**90s 本身对正常工作就偏紧**:`run_analyzer` 是**串行**工具调用后再接一次模型调用,
+单个工具往返最长 `AIOPS_HTTP_TIMEOUT_SEC`(15s),一个分析器最多 2 个工具即 30s,
+之后 reasoning 模型再花 60s+。
+
+于是真正烧 token 的路径是这条,而不是评审举的那条:**一次正常但缓慢的分析被判超时,
+然后重试**。评审把"重试浪费"归因给了确定性错误(那类已被处理),
+实际浪费发生在合法的慢请求上。
+
+改为 180s。这不会让调查跑更久 —— `Budget.max_duration_sec`(默认 300s)先兜住。
+
+### 心跳必须覆盖整个等待期,否则比不设更糟
+
+模型调用是**单次不可分割的 await**,中途没有天然落点可以调 `activity.heartbeat()`。
+一旦设了 `heartbeat_timeout` 却没人按时心跳,Temporal 会把一次**正常推理**判成失联并
+重试 —— 白烧一次完整的模型调用,比不设心跳更糟。
+
+所以引入 `heartbeat_while()`:起一个并发任务跑真正的调用,主循环每 5s 心跳一次。
+心跳窗口设 30s(6 倍余量,吸收 GC 抖动与 SDK 自身的心跳节流)。
+效果是把"worker 猝死"的发现时间从最长 180s 压到 30s 量级。
+
+`run_analyzer` 的工具调用之间**额外**心跳一次 —— 那里是天然落点,
+串行多个工具时不心跳会静默耗掉整个窗口。
+
+取消语义要一并处理:外层取消(工作流取消 / activity 超时)必须传导到内层任务,
+否则会留下孤儿任务继续消耗模型配额。有专门用例覆盖。
+
+## 2) 不改 RetryPolicy 的 non_retryable_error_types(记录依据)
+
+评审举的三个例子 —— JSON 解析失败、参数非法、鉴权失败 —— 前两个**已经被处理**。
+`_complete_validated` 的 docstring 写明了这个设计:
+
+> 若仍失败,则返回由 `fallback` 构造的结构化低置信度兜底结果,让 Activity 成功返回、
+> 由工作流走升级路径 —— 而不是抛异常,那样会确定性地耗尽 Temporal 的 3 次重试
+> 并让整次调查崩掉。
+
+JSON 解析失败、schema 校验失败、`validate_plan` 白名单违规全部 `except` 住,
+修复重问一次,仍失败走兜底。所以"JSON 解析失败烧 3 倍 token"恰好是**已经防住**的事。
+
+真正会重试的只有鉴权:Anthropic 的 `AuthenticationError` 没被捕获,内部 API 401 走
+`raise_for_status()`。但**它们在消耗 token 之前就失败** —— 浪费的是几秒,不是 token。
+
+而且标 `non_retryable` 有反向风险:401 可能是瞬时的(密钥轮换、Secret 挂载滞后),
+标成不可重试会把一个自愈的抖动变成一次失败的调查。**收益是失败信号更清晰,不是省钱**,
+不值得换取那个风险。
+
+## 3) 不引入 continue_as_new
+
+评审自己也说"短期没问题"。补充一条它没提的依据:48h 的人工反馈等待是**单个 timer 事件**,
+不增长 history。所以即便工作流挂着两天,history 也不会因此膨胀。
+真正需要它的前提是放开轮数上限或做常驻 agent,那时再加。
+
+## 4) 载荷风险不成立,但顺带查出两处真问题
+
+评审的前提有两处误:
+
+**(a) `summary` 不是原文。** 它是 Go 侧的定长聚合串,唯一变长的部分被截断:
+
+```go
+// internal/obsquery/loki.go:117
+summary := fmt.Sprintf("%s/%s 日志命中 %d 行(ERROR %d、WARN %d),查询:%s。",
+    ns(scope), orAll(liveResource(scope)), len(lines), levels["ERROR"], levels["WARN"], truncate(query, 80))
+```
+
+原文进对象存储,载荷里只有 `raw_ref`(`gateway.go:268-277`)——
+`model.Evidence` 根本没有 `Raw` 字段。
+
+**(b) 证据当时并**不**跨轮累积。** `all_evidence` 在 `_collect` 内部每轮重新初始化。
+
+用真实 Pydantic converter 按最长 summary、512 字符查询参数(`MAX_TOOL_ARG_LEN` 上限)实测:
+
+```
+默认预算 max_tool_calls=20     37,561 B =  36.7 KiB   ← 1.79% of 2 MiB
+放宽到 100 条证据             144,121 B = 140.7 KiB
+单条证据边际成本               1,332 B
+触及 512 KiB 告警阈值需         385 条证据
+触及 2 MiB 硬上限需           1,566 条证据
+```
+
+差两个数量级。但顺着查证据流向,查出两处**真问题**:
+
+### 4a) 死配置 `AIOPS_MAX_ANALYZER_CONCURRENCY`(已闭合)
+
+`config.py` 读了它,**全仓再无引用** —— 工作流用裸 `asyncio.gather`,
+`Worker` 也没设 `max_concurrent_activities`。运维配了、以为生效了、实际没有。
+**静默失效比没有这个旋钮更糟。**
+
+改为 `AIOPS_MAX_CONCURRENT_ACTIVITIES` 并真的接到 `Worker` 上。
+
+为什么设在 worker 层而不是在工作流里加 semaphore:被 worker 上限挡住的 activity
+处于"未开始"状态,`start_to_close` 计时**还没启动**;而 semaphore 是在 activity
+**内部**等待,计时已经在跑 —— 排队久了会把正常任务拖成超时。同一个"限并发"的诉求,
+两种实现的失败模式完全不同。
+
+默认取 16 而非 3:记账类 activity(`record_phase`/`record_event`/`record_usage`)
+与模型 activity **共享槽位**,配太低会撞上它们 30s 的超时并触发重试。
+
+### 4b) 跨轮证据不可见,导致正确结论被误降级(已闭合)
+
+这是本轮**影响诊断质量最大**的一处,而它藏在评审说反了的那个前提背后。
+
+`enforce_evidence_grounding` 只按"本次入参里的实时证据"判定是否有据(`policy.py`)。
+证据不跨轮累积时,第 2 轮的综合器**看不到**第 1 轮采到的证据,于是:
+
+> 一条由第 1 轮证据支撑的结论,在第 2 轮会被判成无据并降级。
+> **补充采集反而让结论更难成立。**
+
+改为在 `run()` 里累积,`_collect` 只负责采本轮。
+
+分析器结论**不**累积 —— 它们是模型对当轮证据的解读,跨轮叠加会把已被后续证据推翻的
+旧解读一并喂回去。累积的是**事实**(证据),重算的是**解读**。
+
+载荷安全性:`max_tool_calls` 是**全局**预算(不是每轮),所以它同时是累积证据条数的
+上界,实测见上。
+
+这条行为**只在多轮时可见**,第 1 轮无论累积与否表现都一样 —— 单元测试结构上抓不到。
+用时间跳跃环境跑真实工作流、强制走满 2 轮验证:回退改动后测试确实失败,
+日志直接印证后果:`downgraded 1 ungrounded supported hypothes(es): hyp-1`。
+
+## 5) WorkflowRunTimeout:观察对,但按建议改会更糟(已闭合)
+
+`workflow.py` 的注释当时写着"与控制面设置的推荐 run_timeout 互为补充",
+而 `StartWorkflowOptions` 里**并没有**这个字段。评审这条查证无误。
+
+**但直接补上会踩一个陷阱。** `_FEEDBACK_TIMEOUT = 48h`,而 run timeout 到点是
+**服务端硬终止**:不执行 CLOSED 迁移、不 flush 用量。所以任何小于 48h 的 run timeout
+会在工作流**正当等待人工**时把它掐掉 —— 库里永久停在 `waiting_feedback`、用量永不落账。
+
+**比完全不设 run timeout 更糟。** 当前设计已有三重终止保证(预算、`max_rounds`、
+反馈超时),run timeout 只是第四道兜底。
+
+所以真正的缺陷是**注释本身**:它断言了一个不存在的兜底。
+已知的空缺不危险,**被误信的空缺才危险**。
+
+处置:补上 run timeout,默认 7 天,并加**下限校验** `MinRunTimeout = 48h + 12h`
+(留 12h 给反馈超时之后的收尾 activity)。配小了直接拒绝启动,不是打条 warn。
+错误信息里写明后果("会让调查永久停在 waiting_feedback"),
+否则运维只看到一个数字,不知道该往大调还是往小调。
+
+### 跨语言耦合要有断言钉住
+
+`48h` 这个值同时活在三处:Python 的 `_FEEDBACK_TIMEOUT`、Go 的
+`temporalx.WorkerFeedbackTimeout`、Go 的 `config.MinTemporalRunTimeoutSec`。
+没有编译器守护,改一处不会让另一处报错 —— 而**违反的后果是破坏性的**。
+用两条断言钉住等式,任一处漂移都会让测试失败。
+
+### 配置错误不能走降级路径
+
+Temporal 是**可降级**依赖:连不上时控制面继续跑(调查照常落库,只是工作流不启动)。
+但配置非法不该降级 —— 那样运维只看到一条 warn,工作流永远不启动,日志里也看不出配错了。
+
+实现时我先写成了 `errors.As(terr, &badTimeout)` 单判一种错误。
+**做完才发现这个分支不可达**:`config.Validate()` 已在 `Dial` 之前拦掉非法值,
+到达 `Dial` 的只可能是 0、负数或合法值。这是我这几轮里第二次写出不可达的防御代码。
+
+没有直接删掉,因为删了会留下真实隐患:`Dial` 日后新增的任何配置校验都会被降级路径
+静默吞掉。改为引入 `ErrConfig` 哨兵,主流程判 `errors.Is(terr, temporalx.ErrConfig)` ——
+从"针对一种错误的死分支"变成"针对一类错误的活策略"。
+并加反向用例:连接失败**不能**被误判为配置错误,否则 Temporal 抖动会让控制面拒绝启动。
+
+## 验证
+
+新增 `scripts/check-workflow-timeouts.sh`(14/14)。它端到端起真实控制面,因为第 5 项的
+失效方式是**静默**的:校验若漏到 `Dial` 之后,Temporal 可达时非法配置永远不会被发现;
+Temporal 不可达时又会被当成"可降级"只打一条 warn。**两种情况在日志里都看不出配置错了。**
+
+覆盖:默认值能连上 Temporal、配小拒绝启动且错误信息说明后果、走的是 fail-fast 而非降级
+路径、边界值 216000 通过而 215999 拒绝、0 回落默认值、死配置不再出现、新配置真的接线。
+
+Python 侧新增 12 个用例:心跳在长等待期间**多次**触发(而非两端各一次)、
+快速完成时不产生多余心跳、异常原样抛出、外层取消传导到内层、非 activity 上下文静默跳过、
+以及各超时之间的不变式(心跳窗口/间隔 ≥4 倍余量、心跳 < start_to_close/3、
+180s 扣掉串行工具调用后仍留 ≥120s 给推理、记账超时未被放宽)。
+
+跨轮证据 2 个用例,含一条**回归护栏**:累积载荷必须远离 512 KiB 告警阈值 ——
+日后放宽 `max_tool_calls` 或给 `Evidence` 加字段时会先失败。
+
+全量回归:Go 两模块 build+vet+test 干净,Python 124 passed / 3 skipped,
+前端 tsc 通过,helm lint 通过,k8s/compose YAML 解析通过。
+脚本:workflow-timeouts 14/14、probes 9/9、two-tier 16/16、signal-idempotency 6/6、
+trigger-policy 7/7、auth 14/14、roles 11/11、correlation-window 6/6、
+feedback-loop 13/13、queue-metrics 12/12、outcome-metrics 10/10、alert-rules OK、
+ratelimit 7/7、orphan-reconcile 4/4、frontend-auth 5/5、blast PASS、slo-burnrate 17/17。
+
+## 过程教训
+
+**评审意见要逐条核实,而不是逐条实施。** 五条里两条前提有误。
+若按第 4 条的建议去"优化载荷",会为一个占用 1.79% 的东西增加复杂度;
+而按第 5 条的字面建议补 run timeout,会**制造**一个比原缺口更糟的缺陷。
+
+但否掉不等于没有收获:**第 4 条的错误前提反而领我找到了跨轮证据那个真问题** ——
+它就藏在"证据会累积"这个错误假设的反面。评审看错了方向,但看对了地方。
+
+**第二次写出不可达的防御代码。** 上一轮是"永不触发的 per-backend 警告",这次是
+`errors.As` 单判一种错误。共同的成因:写防御代码时只想"这个错误该怎么处理",
+没想"这个错误在当前控制流下**到得了这里吗**"。
+两次都是做完之后回头推演控制流才发现的 —— 说明这一步得放到写完就做,而不是等回归。

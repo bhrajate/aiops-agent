@@ -109,6 +109,12 @@ config:
   temporalHostPort: "temporal-frontend.temporal.svc.cluster.local:7233"
   temporalNamespace: "default"
   temporalQueue: "investigation-ai"
+  # 7 天。最外层硬兜底,不是调查时长上限(Budget.max_duration_sec 管那个)。
+  # 必须 >= 216000(60h):Worker 最长等待人工反馈 48h,run timeout 小于它会
+  # 硬终止正在正常等待的调查,使其永久停在 waiting_feedback。控制面启动时校验。
+  temporalRunTimeoutSec: "604800"
+  # Worker 并发 activity 上限,同时也是并发模型调用上限。
+  maxConcurrentActivities: "16"
   s3Endpoint: "http://minio.data.svc.cluster.local:9000"
   s3Bucket: "aiops-evidence"
   authMode: "oidc"                 # hs256 | oidc | disabled

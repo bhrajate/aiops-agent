@@ -2,6 +2,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,11 @@ type Config struct {
 	TemporalHostPort string
 	TemporalNS       string
 	TemporalQueue    string
+	// TemporalRunTimeoutSec 单个 Workflow run 的墙钟上限,最外层硬兜底。
+	// 到点是服务端**硬终止**:不执行 CLOSED 迁移、不落账用量。因此它必须远大于
+	// Worker 侧的人工反馈等待(48h),下限由 temporalx.MinRunTimeout 校验,
+	// 配小了进程直接拒绝启动而不是静默截断。默认 7 天。
+	TemporalRunTimeoutSec int
 
 	// AutoMigrate 让进程启动时自行把业务库 schema 迁到最新。
 	// 默认 false:生产迁移应是独立步骤(Helm pre-upgrade Job),因为多副本滚动
@@ -249,6 +255,9 @@ func Load() Config {
 		TemporalHostPort:     getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
 		TemporalNS:           getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
 		TemporalQueue:        getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
+		// 7 天。见字段说明:这不是调查时长上限(那由 Budget 管),而是异常挂死的
+		// run 的回收兜底。
+		TemporalRunTimeoutSec: getint("AIOPS_TEMPORAL_RUN_TIMEOUT_SEC", 7*24*3600),
 		ClusterAgentURL:      getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
 		ClusterAgents:        getenv("AIOPS_CLUSTER_AGENTS", ""),
 		ClusterLabel:         getenv("AIOPS_CLUSTER_LABEL", ""),
@@ -421,11 +430,27 @@ func (c Config) Validate() error {
 		}
 	}
 
+	// 与环境无关:run timeout 配小了会硬终止正在等待人工的调查,让它永久卡在
+	// waiting_feedback。开发环境同样会被这个坑到,所以不放在 IsProduction 里。
+	// 阈值定义在 temporalx(与 Worker 的 48h 反馈超时耦合),这里只做数值比较,
+	// 避免 config 反向依赖 temporalx。
+	if c.TemporalRunTimeoutSec > 0 && c.TemporalRunTimeoutSec < MinTemporalRunTimeoutSec {
+		problems = append(problems, fmt.Sprintf(
+			"AIOPS_TEMPORAL_RUN_TIMEOUT_SEC=%d 过小(下限 %d 秒 = %d 小时):"+
+				"Worker 会等待人工反馈最长 48 小时,run timeout 小于它会硬终止正在正常等待的调查,"+
+				"使其永久停留在 waiting_feedback 且用量不落账",
+			c.TemporalRunTimeoutSec, MinTemporalRunTimeoutSec, MinTemporalRunTimeoutSec/3600))
+	}
+
 	if len(problems) > 0 {
 		return &ValidationError{Problems: problems}
 	}
 	return nil
 }
+
+// MinTemporalRunTimeoutSec 必须与 temporalx.MinRunTimeout 保持一致
+// (48h 反馈超时 + 12h 余量)。temporalx 侧有断言守住这个等式。
+const MinTemporalRunTimeoutSec = (48 + 12) * 3600
 
 // ValidationError 聚合启动校验问题。
 type ValidationError struct{ Problems []string }

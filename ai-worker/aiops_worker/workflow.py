@@ -50,12 +50,27 @@ with workflow.unsafe.imports_passed_through():
     )
 
 # Activity 执行的默认参数:有界超时 + 有限重试(架构 7.2)。
-_MODEL_TIMEOUT = timedelta(seconds=90)
+#
+# 模型类 activity 给到 180s:``run_analyzer`` 是**串行**工具调用后再接一次模型
+# 调用 —— 单个工具往返最长 AIOPS_HTTP_TIMEOUT_SEC(默认 15s),两个工具就 30s,
+# 之后 reasoning 模型本身可能再花 60s+。原先的 90s 会把一次**正常但缓慢**的分析
+# 判成超时并重试,那才是真正白烧三倍 token 的路径。
+# 注意这不会让调查跑更久:Budget.max_duration_sec(默认 300s)会先兜住。
+_MODEL_TIMEOUT = timedelta(seconds=180)
 _IO_TIMEOUT = timedelta(seconds=30)
+# 心跳窗口。activity 侧每 HEARTBEAT_INTERVAL_SEC(5s)心跳一次,这里留足 6 倍
+# 余量以吸收 GC、事件循环抖动与 Temporal 的心跳节流(SDK 只按 timeout 的一定
+# 比例真正上报)。作用是把「worker 被 OOM kill」的发现时间从 start_to_close
+# (最长 180s)压到 30s 量级。
+_HEARTBEAT_TIMEOUT = timedelta(seconds=30)
 _RETRY = RetryPolicy(maximum_attempts=3, initial_interval=timedelta(seconds=1))
 # 等待人工反馈的墙钟兜底:处于 WaitingFeedback 的调查不能永久阻塞。超时后自动关闭
-# (业务库仍是事实源,人工可以重新打开)。它与控制面启动时设置的推荐
-# Temporal run_timeout 互为补充。
+# (业务库仍是事实源,人工可以重新打开)。
+#
+# 与控制面 AIOPS_WORKFLOW_RUN_TIMEOUT 的关系:那是**硬**兜底,到点由服务端直接
+# 终止,不会执行 CLOSED 迁移、也不会 flush 用量 —— 库里会永久卡在
+# waiting_feedback。因此它必须**远大于**本超时,只用来兜住「连本超时都没生效」
+# 的异常。见 control-plane/internal/temporalx/client.go 的同名说明。
 _FEEDBACK_TIMEOUT = timedelta(hours=48)
 
 
@@ -248,6 +263,7 @@ class InvestigationWorkflow:
             InvestigationActivities.run_quick_triage,
             TriageInput(context=context),
             start_to_close_timeout=_MODEL_TIMEOUT,
+            heartbeat_timeout=_HEARTBEAT_TIMEOUT,
             retry_policy=_RETRY,
         )
         self._usage.add_model_usage(
@@ -278,6 +294,7 @@ class InvestigationWorkflow:
             InvestigationActivities.build_investigation_plan,
             PlanInput(context=context, triage=triage_out.triage),
             start_to_close_timeout=_MODEL_TIMEOUT,
+            heartbeat_timeout=_HEARTBEAT_TIMEOUT,
             retry_policy=_RETRY,
         )
         self._usage.add_model_usage(plan_out.usage.total_tokens, plan_out.usage.cost_usd)
@@ -287,6 +304,15 @@ class InvestigationWorkflow:
         escalation_reason: Optional[str] = None
         last_synthesis: Optional[SynthesisResult] = None
         round_index = 0
+        # **跨轮累积**的证据。必须在循环外累积:综合器要能引用前几轮采到的证据,
+        # 而 enforce_evidence_grounding 只按「本次入参里的实时证据」判定是否有据
+        # (policy.py)。若只喂本轮证据,第 2 轮复述一条由第 1 轮证据支撑的结论
+        # 会被判成无据并降级 —— 补充采集反而让结论更难成立。
+        #
+        # 载荷安全:max_tool_calls 是**全局**预算(不是每轮),因此累积总量同样
+        # 受它约束;实测单条证据约 1.3 KB,默认预算 20 条合计约 37 KB,
+        # 距 Temporal 2 MiB 上限两个数量级。
+        cumulative_evidence: list[Evidence] = []
 
         # ``round_index`` 统计**已完成**的采集轮数。在 ``max_rounds=N`` 时,循环恰好
         # 跑 N 轮采集(轮次计数在一轮**结束**时才自增,因此 N=3 不会再悄悄只跑 2 轮)。
@@ -301,9 +327,13 @@ class InvestigationWorkflow:
 
             # planning/collecting -> collecting
             await self._transition(inp, Phase.COLLECTING)
-            all_evidence, analyzer_results = await self._collect(
+            round_evidence, analyzer_results = await self._collect(
                 inp, context, plan, budget
             )
+            # 证据累积;分析器结论**不**累积 —— 它们是模型对当轮证据的解读,
+            # 跨轮叠加会把已被后续证据推翻的旧解读一并喂回去。综合器每轮基于
+            # 全部证据 + 当轮解读重新推理。
+            cumulative_evidence.extend(round_evidence)
 
             if self._should_cancel():
                 return await self._finish_cancelled(inp)
@@ -321,11 +351,12 @@ class InvestigationWorkflow:
                     investigation_id=inp.investigation_id,
                     control_internal_url=inp.control_internal_url,
                     context=context,
-                    evidences=all_evidence,
+                    evidences=cumulative_evidence,
                     analyzer_results=analyzer_results,
                     round_index=round_index,
                 ),
                 start_to_close_timeout=_MODEL_TIMEOUT,
+                heartbeat_timeout=_HEARTBEAT_TIMEOUT,
                 retry_policy=_RETRY,
             )
             self._usage.add_model_usage(
@@ -378,6 +409,7 @@ class InvestigationWorkflow:
                     supplemental_from=syn_out.synthesis,
                 ),
                 start_to_close_timeout=_MODEL_TIMEOUT,
+                heartbeat_timeout=_HEARTBEAT_TIMEOUT,
                 retry_policy=_RETRY,
             )
             self._usage.add_model_usage(
@@ -393,6 +425,7 @@ class InvestigationWorkflow:
     async def _collect(
         self, inp: WorkflowInput, context: IncidentContext, plan, budget: Budget
     ) -> tuple[list[Evidence], list]:
+        """采集**本轮**的证据与分析器结论。跨轮累积由调用方负责(见 run)。"""
         scope = {"cluster_id": inp.cluster_id, "tenant_id": inp.tenant_id}
 
         all_evidence: list[Evidence] = []
@@ -440,6 +473,7 @@ class InvestigationWorkflow:
                     scope=scope,
                 ),
                 start_to_close_timeout=_MODEL_TIMEOUT,
+                heartbeat_timeout=_HEARTBEAT_TIMEOUT,
                 retry_policy=_RETRY,
             )
             for spec in specs

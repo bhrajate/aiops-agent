@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func base(prod bool) Config {
 	env := "development"
@@ -174,5 +177,39 @@ func TestValidate_DevAllowsMockObservability(t *testing.T) {
 	c.PrometheusURL, c.LokiURL, c.TempoURL, c.ClusterLabel = "", "", "", ""
 	if err := c.Validate(); err != nil {
 		t.Fatalf("开发模式应允许 mock 观测数据源: %v", err)
+	}
+}
+
+func TestValidate_RejectsShortTemporalRunTimeout(t *testing.T) {
+	// 与环境无关:开发环境同样会被这个坑到(调查永久卡在 waiting_feedback),
+	// 因此两种 env 都必须拒绝。
+	for _, prod := range []bool{false, true} {
+		c := base(prod)
+		c.TemporalRunTimeoutSec = 24 * 3600 // 24h:对单次调查够用,但小于 48h 反馈等待
+		err := c.Validate()
+		if err == nil {
+			t.Fatalf("prod=%v: 期望拒绝 24h run timeout", prod)
+		}
+		if !strings.Contains(err.Error(), "waiting_feedback") {
+			t.Fatalf("prod=%v: 错误信息应说明后果,实际: %v", prod, err)
+		}
+	}
+}
+
+func TestValidate_AcceptsZeroTemporalRunTimeout(t *testing.T) {
+	// 0 = 未配置,由 temporalx 回落到默认值,不该在此报错。
+	c := base(true)
+	c.TemporalRunTimeoutSec = 0
+	if err := c.Validate(); err != nil {
+		t.Fatalf("未配置时不应报错: %v", err)
+	}
+}
+
+func TestValidate_AcceptsDefaultTemporalRunTimeout(t *testing.T) {
+	// Load() 的默认值必须能通过自己的校验,否则不配该变量就起不来。
+	c := base(true)
+	c.TemporalRunTimeoutSec = 7 * 24 * 3600
+	if err := c.Validate(); err != nil {
+		t.Fatalf("默认值应通过校验: %v", err)
 	}
 }
