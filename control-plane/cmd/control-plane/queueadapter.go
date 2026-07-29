@@ -34,3 +34,15 @@ func (a queueStatsAdapter) QueueStats(ctx context.Context) (telemetry.QueueStats
 	}
 	return out, nil
 }
+
+// toSet 把逗号分隔配置转成集合,便于策略做 O(1) 判定。
+func toSet(items []string) map[string]bool {
+	if len(items) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(items))
+	for _, s := range items {
+		m[s] = true
+	}
+	return m
+}

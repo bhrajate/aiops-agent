@@ -19,6 +19,7 @@ type Metrics struct {
 	AuthDenials           *prometheus.CounterVec   // 按 reason 维度
 	RetentionPurged       *prometheus.CounterVec   // 按 target 维度
 	IngressThrottled      *prometheus.CounterVec   // 按 tenant 维度
+	TriggerDecisions      *prometheus.CounterVec   // 按 triggered、reason 维度
 	reg                   *prometheus.Registry
 }
 
@@ -47,11 +48,17 @@ func New() *Metrics {
 		IngressThrottled: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aiops_ingress_throttled_total",
 			Help: "Signal ingress requests rejected by rate limiting"}, []string{"tenant"}),
+		// 自动触发决策(F7)。按 reason 分维度是关键:只看总量无法回答
+		// "跳过的都是些什么",而那正是调阈值时唯一需要的信息。
+		TriggerDecisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_trigger_decisions_total",
+			Help: "Auto-trigger policy decisions by outcome and reason"},
+			[]string{"triggered", "reason"}),
 		reg: reg,
 	}
 	reg.MustRegister(m.SignalsIngested, m.IncidentsCreated, m.InvestigationsStarted,
 		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials,
-		m.RetentionPurged, m.IngressThrottled)
+		m.RetentionPurged, m.IngressThrottled, m.TriggerDecisions)
 	// Go runtime + process 指标
 	reg.MustRegister(prometheus.NewGoCollector())
 	return m
@@ -102,5 +109,16 @@ func (m *Metrics) ObserveRetentionPurge(target string, rows int) {
 func (m *Metrics) IncIngressThrottled(tenant string) {
 	if m != nil {
 		m.IngressThrottled.WithLabelValues(tenant).Inc()
+	}
+}
+
+// IncTriggerDecision 记录一次自动触发决策(F7)。
+func (m *Metrics) IncTriggerDecision(triggered bool, reason string) {
+	if m != nil {
+		flag := "false"
+		if triggered {
+			flag = "true"
+		}
+		m.TriggerDecisions.WithLabelValues(flag, reason).Inc()
 	}
 }

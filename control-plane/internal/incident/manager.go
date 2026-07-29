@@ -158,12 +158,22 @@ func NormalizeSeverity(raw string) string {
 }
 
 // ClassifyFault 基于标签/资源/来源做首版四类故障分类(文档第 1 节)。
+//
+// 只匹配标签**值**,不匹配标签名。原实现把 labelBlob 拼成 "key=value ..." 后做子串
+// 匹配,于是标签名参与判定 —— 而几乎每条真实 K8s 告警都带 `deployment=<名字>`,
+// 其中含 "deploy",于是无条件命中 release_regression。后果有两层:
+//   - fault_category 是 EvaluateAuto 变更关联判据的输入,于是**每个 incident 都因
+//     "变更关联"被触发**,自动触发策略形同失效;
+//   - fault_category 会下发给 planner,把 RCA 的先验偏向"发布回归"。
+//
+// 另外把范围类标签(namespace/cluster/pod 名等)排除在**变更关键词**匹配之外:
+// namespace 叫 "deploy-tools" 的团队,否则所有告警都会被当成发布回归。
 func ClassifyFault(s model.Signal) string {
-	blob := strings.ToLower(s.SignalType + " " + s.ResourceRef.Kind + " " + labelBlob(s.Labels))
+	blob := strings.ToLower(s.SignalType + " " + s.ResourceRef.Kind + " " + labelValueBlob(s.Labels, nil))
+	// 变更关键词只在非范围标签的值里找,避免被资源/命名空间的名字带偏。
+	changeBlob := strings.ToLower(s.SignalType + " " + labelValueBlob(s.Labels, scopeLabels))
 	switch {
-	case s.SignalType == "change" || strings.Contains(blob, "deploy") ||
-		strings.Contains(blob, "release") || strings.Contains(blob, "rollout") ||
-		strings.Contains(blob, "version"):
+	case s.SignalType == "change" || containsAny(changeBlob, "deploy", "release", "rollout", "version"):
 		return "release_regression"
 	case strings.Contains(blob, "crashloop") || strings.Contains(blob, "oomkill") ||
 		strings.Contains(blob, "pod") || strings.Contains(blob, "restart") ||
@@ -182,15 +192,35 @@ func ClassifyFault(s model.Signal) string {
 	}
 }
 
-func labelBlob(l map[string]string) string {
+// scopeLabels 是标识"故障发生在哪"的标签,其**值**是资源/范围名字,
+// 不表达故障性质。做变更关键词匹配时必须排除它们:否则一个叫 "deploy-tools"
+// 的 namespace 会让该空间下所有告警都被判为发布回归。
+var scopeLabels = map[string]bool{
+	"namespace": true, "cluster": true, "pod": true, "node": true,
+	"instance": true, "container": true, "job": true, "service": true,
+	"deployment": true, "statefulset": true, "daemonset": true,
+}
+
+// labelValueBlob 只拼接标签**值**(不含标签名),skip 中的键整个跳过。
+func labelValueBlob(l map[string]string, skip map[string]bool) string {
 	var b strings.Builder
 	for k, v := range l {
-		b.WriteString(k)
-		b.WriteByte('=')
+		if skip[k] {
+			continue
+		}
 		b.WriteString(v)
 		b.WriteByte(' ')
 	}
 	return b.String()
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTitle(s model.Signal) string {

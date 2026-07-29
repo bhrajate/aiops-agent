@@ -94,6 +94,23 @@ type Config struct {
 	ReconcileGraceSec    int
 	ReconcileIntervalSec int
 
+	// 自动触发策略(F7)。此前 EvaluateAuto 四个分支全返回 true(伪装成策略的
+	// 常量),每个 incident 都消耗一次 triage 模型调用,含 P4 单信号。
+	// 跳过的 incident 仍入库、仍可人工发起调查,且会写审计与指标。
+	//
+	// AutoTriggerAll=true 完整回到旧行为(一律触发),用于回退或对照。
+	AutoTriggerAll bool
+	// AutoTriggerAlwaysSeverities 无条件触发的严重度,逗号分隔。
+	AutoTriggerAlwaysSeverities []string
+	// AutoTriggerSkipSeverities 允许被跳过的严重度(仍需其他判据均未命中)。
+	// 默认只含 P4:P3 是最常见级别且混着真问题,拦它会显著改变值班预期。
+	AutoTriggerSkipSeverities []string
+	// AutoTriggerBurstSignals 信号数达到此值视为突发;<=0 关闭该判据。
+	AutoTriggerBurstSignals int
+	// AutoTriggerOnChange 变更关联时触发。默认开:变更关联是最容易被自动定位的
+	// 一类根因,放过它损失最大。
+	AutoTriggerOnChange bool
+
 	// 可观测性(架构第 16 节)
 	ServiceName  string
 	OTLPEndpoint string // 为空则不导出 trace(仍可埋点)
@@ -247,6 +264,12 @@ func Load() Config {
 		CorrelationWindowSec: getint("AIOPS_CORRELATION_WINDOW_SEC", 900),
 		ReconcileGraceSec:    getint("AIOPS_RECONCILE_GRACE_SEC", 60),
 		ReconcileIntervalSec: getint("AIOPS_RECONCILE_INTERVAL_SEC", 60),
+
+		AutoTriggerAll:              getbool("AIOPS_AUTO_TRIGGER_ALL", false),
+		AutoTriggerAlwaysSeverities: splitNonEmpty(strings.ToUpper(getenv("AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES", "P1,P2"))),
+		AutoTriggerSkipSeverities:   splitNonEmpty(strings.ToUpper(getenv("AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES", "P4"))),
+		AutoTriggerBurstSignals:     getint("AIOPS_AUTO_TRIGGER_BURST_SIGNALS", 3),
+		AutoTriggerOnChange:         getbool("AIOPS_AUTO_TRIGGER_ON_CHANGE", true),
 
 		ServiceName:  getenv("AIOPS_SERVICE_NAME", "aiops-control-plane"),
 		OTLPEndpoint: getenv("AIOPS_OTLP_ENDPOINT", ""),

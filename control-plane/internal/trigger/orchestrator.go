@@ -26,20 +26,41 @@ type Orchestrator struct {
 	tenant      string
 	cooldownSec int
 	maxActive   int
+	autoPolicy  AutoPolicyConfig
+	metrics     TriggerMetrics // 可为 nil(降级)
 	log         *slog.Logger
+}
+
+// TriggerMetrics 记录触发决策。用窄接口,与本项目其他包一致。
+type TriggerMetrics interface {
+	IncTriggerDecision(triggered bool, reason string)
 }
 
 // Limits 触发策略的冷却/并发上限(文档 6.3 硬停止条件)。
 type Limits struct {
 	CooldownSec int
 	MaxActive   int
+	// AutoPolicy 自动触发阈值。零值(未设置 AlwaysSeverities)时用 DefaultAutoPolicy()。
+	AutoPolicy AutoPolicyConfig
 }
 
 func NewOrchestrator(s *store.Store, wf WorkflowStarter, internalURL, tenant string, limits Limits, log *slog.Logger) *Orchestrator {
+	pol := limits.AutoPolicy
+	if pol.AlwaysSeverities == nil && !pol.TriggerAll {
+		pol = DefaultAutoPolicy()
+	}
 	return &Orchestrator{
 		store: s, wf: wf, internalURL: internalURL, tenant: tenant,
-		cooldownSec: limits.CooldownSec, maxActive: limits.MaxActive, log: log,
+		cooldownSec: limits.CooldownSec, maxActive: limits.MaxActive,
+		autoPolicy: pol, log: log,
 	}
+}
+
+// WithMetrics 注入指标记录器。分开设置而非塞进 NewOrchestrator:
+// 该构造函数已有 6 个参数,再加一个可选项会让所有调用点(含测试)都被迫改动。
+func (o *Orchestrator) WithMetrics(m TriggerMetrics) *Orchestrator {
+	o.metrics = m
+	return o
 }
 
 // HandleIncidentEvent 消费 incidents topic(bus.Handler 签名)。
@@ -49,8 +70,20 @@ func (o *Orchestrator) HandleIncidentEvent(ctx context.Context, _ []byte, value 
 		o.log.Warn("bad incident payload", "err", err)
 		return nil
 	}
-	dec := EvaluateAuto(inc)
+	dec := EvaluateAutoWithConfig(inc, o.autoPolicy)
+	if o.metrics != nil {
+		o.metrics.IncTriggerDecision(dec.Trigger, dec.Reason)
+	}
 	if !dec.Trigger {
+		// 跳过必须留痕。跳过不等于忽略:incident 仍入库、仍在前端可见、
+		// 仍可人工发起调查。但若不写审计,"为什么这个故障没有诊断"将无从回答
+		// —— 静默丢弃比不拦更糟。
+		o.store.Audit(ctx, inc.TenantID, "system", "trigger_skipped", "incident", inc.IncidentID, "ok",
+			map[string]any{"cluster": inc.ClusterID},
+			map[string]any{"reason": dec.Reason, "severity": inc.Severity,
+				"signal_count": inc.SignalCount, "policy_version": PolicyVersion})
+		o.log.Info("auto trigger skipped", "incident_id", inc.IncidentID,
+			"reason", dec.Reason, "severity", inc.Severity, "signal_count", inc.SignalCount)
 		return nil
 	}
 

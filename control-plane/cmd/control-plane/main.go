@@ -217,8 +217,28 @@ func main() {
 	// ---- 组件装配 ----
 	gw := gateway.New(st, agents, obsClient, rawStore, metrics, log)
 	mgr := incident.New(st, cfg.CorrelationWindowSec, metrics, log)
+	// 自动触发策略(F7):此前一律触发,每个 incident 都烧一次 triage 调用。
+	// 跳过的仍入库、仍可人工发起调查,并写审计 + 指标。
+	autoPolicy := trigger.AutoPolicyConfig{
+		TriggerAll:                 cfg.AutoTriggerAll,
+		AlwaysSeverities:           toSet(cfg.AutoTriggerAlwaysSeverities),
+		SkipSeverities:             toSet(cfg.AutoTriggerSkipSeverities),
+		BurstSignalCount:           cfg.AutoTriggerBurstSignals,
+		TriggerOnChangeCorrelation: cfg.AutoTriggerOnChange,
+	}
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
-		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)
+		trigger.Limits{
+			CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant,
+			AutoPolicy: autoPolicy,
+		}, log).WithMetrics(metrics)
+	if cfg.AutoTriggerAll {
+		log.Warn("AIOPS_AUTO_TRIGGER_ALL=true:每个 incident 都会消耗一次分诊模型调用" +
+			"(含 P4 单信号),仅用于回退或对照")
+	} else {
+		log.Info("auto trigger policy",
+			"always", cfg.AutoTriggerAlwaysSeverities, "skip", cfg.AutoTriggerSkipSeverities,
+			"burst_signals", cfg.AutoTriggerBurstSignals, "on_change", cfg.AutoTriggerOnChange)
+	}
 	// 信号入口限流(F6):告警风暴是预期故障模式,ingress 之前只有 2MB body 上限。
 	// nil(未配置)即不限流。
 	ingressLimiter := httpx.NewTokenBucket(cfg.IngressRatePerSec, cfg.IngressBurst)

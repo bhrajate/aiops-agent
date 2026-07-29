@@ -7,9 +7,14 @@ import (
 )
 
 func TestEvaluateAutoDeterministic(t *testing.T) {
-	// P1/P2 必触发
-	if d := EvaluateAuto(model.Incident{Severity: "P1"}); !d.Trigger || d.Reason != "severity_p1_p2" {
-		t.Errorf("P1 应触发 severity_p1_p2, got %+v", d)
+	// P1/P2 必触发。reason 拆成 severity_p1 / severity_p2(原为合并的
+	// severity_p1_p2):它落到 investigations.trigger_reason 供审计,
+	// 分开能直接看出是哪一级触发的,不必再回查 incident。
+	if d := EvaluateAuto(model.Incident{Severity: "P1"}); !d.Trigger || d.Reason != "severity_p1" {
+		t.Errorf("P1 应触发 severity_p1, got %+v", d)
+	}
+	if d := EvaluateAuto(model.Incident{Severity: "P2"}); !d.Trigger || d.Reason != "severity_p2" {
+		t.Errorf("P2 应触发 severity_p2, got %+v", d)
 	}
 	// 信号突增
 	if d := EvaluateAuto(model.Incident{Severity: "P3", SignalCount: 5}); !d.Trigger || d.Reason != "signal_burst" {
