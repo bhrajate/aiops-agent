@@ -21,14 +21,23 @@ const (
 	ActionStartInvestig  Action = "start_investigation"
 	ActionCancelInvestig Action = "cancel_investigation"
 	ActionFeedback       Action = "feedback"
+	// ActionReviewGolden 审核评测用例(反馈闭环)。
+	//
+	// 刻意**只给 sre/admin**,不给 oncall:批准一条用例意味着它进入评测集,
+	// 而评测集决定发布质量门槛 —— 一条错误标注会让门槛失真,且这种失真很难发现
+	// (门槛照常通过或照常失败,只是标准错了)。值班人员在故障处置中提交反馈是
+	// 本职,但决定"什么算正确答案"应由更少的人负责。
+	ActionReviewGolden Action = "review_golden_case"
 )
 
 // rolePermissions 定义 RBAC(SECURITY §2)。viewer ⊂ oncall ⊂ sre ⊂ admin。
 var rolePermissions = map[string][]Action{
 	"viewer": {ActionReadIncident, ActionReadEvidence},
 	"oncall": {ActionReadIncident, ActionReadEvidence, ActionStartInvestig, ActionCancelInvestig, ActionFeedback},
-	"sre":    {ActionReadIncident, ActionReadEvidence, ActionStartInvestig, ActionCancelInvestig, ActionFeedback},
-	"admin":  {ActionReadIncident, ActionReadEvidence, ActionStartInvestig, ActionCancelInvestig, ActionFeedback},
+	"sre": {ActionReadIncident, ActionReadEvidence, ActionStartInvestig, ActionCancelInvestig,
+		ActionFeedback, ActionReviewGolden},
+	"admin": {ActionReadIncident, ActionReadEvidence, ActionStartInvestig, ActionCancelInvestig,
+		ActionFeedback, ActionReviewGolden},
 }
 
 // Can 判断 principal 的角色是否允许某动作(RBAC)。

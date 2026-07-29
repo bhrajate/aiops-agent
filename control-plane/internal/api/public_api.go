@@ -35,8 +35,16 @@ type PublicAPI struct {
 	devUsers    map[string]auth.DevUser
 	agentScope  auth.AgentServiceScope
 	corsOrigins []string
+	// tenant 是进程级租户(Principal 上没有租户,租户由部署决定)。
+	tenant      string
 	feedbackMet FeedbackMetrics // 可为 nil(降级)
+	goldenMet   GoldenMetrics   // 可为 nil(降级)
 	log         *slog.Logger
+}
+
+// GoldenMetrics 记录评测用例提升(反馈闭环)。
+type GoldenMetrics interface {
+	IncGoldenCasePromoted()
 }
 
 // FeedbackMetrics 记录人工反馈(F10 采纳率)。窄接口。
@@ -48,6 +56,20 @@ type FeedbackMetrics interface {
 // NewPublicAPI 已有 8 个参数。
 func (a *PublicAPI) WithFeedbackMetrics(m FeedbackMetrics) *PublicAPI {
 	a.feedbackMet = m
+	return a
+}
+
+// WithGoldenMetrics 注入评测用例指标记录器。
+func (a *PublicAPI) WithGoldenMetrics(m GoldenMetrics) *PublicAPI {
+	a.goldenMet = m
+	return a
+}
+
+// WithTenant 设置进程级租户(用于没有 investigation 上下文的端点,如评测用例审核)。
+func (a *PublicAPI) WithTenant(t string) *PublicAPI {
+	if t != "" {
+		a.tenant = t
+	}
 	return a
 }
 
@@ -84,6 +106,9 @@ func (a *PublicAPI) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/investigations/{id}/feedback", a.postFeedback)
 	mux.HandleFunc("GET /v1/evidence/{id}", a.getEvidence)
 	mux.HandleFunc("GET /v1/knowledge", a.searchKnowledge)
+	// 反馈闭环:待审队列与审核(仅 sre/admin,见 auth.ActionReviewGolden)
+	mux.HandleFunc("GET /v1/golden-cases", a.listGoldenCases)
+	mux.HandleFunc("POST /v1/golden-cases/{id}/review", a.reviewGoldenCase)
 
 	// 认证中间件:跳过 healthz / 登录 / signals(webhook 自有鉴权)
 	skip := func(r *http.Request) bool {

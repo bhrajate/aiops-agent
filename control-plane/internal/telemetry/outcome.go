@@ -46,6 +46,10 @@ type Outcome struct {
 	DiagnosisPublished   *prometheus.CounterVec // 按 status
 	HumanFeedback        *prometheus.CounterVec // 按 action
 	UngroundedDowngrades prometheus.Counter
+	// GoldenCasesPromoted 反馈闭环产出的待审用例数。
+	// 它与 HumanFeedback{action="confirm"} 的比值回答"有多少反馈真的变成了学习材料"
+	// —— 反馈闭环是否在工作,只看这个数。
+	GoldenCasesPromoted prometheus.Counter
 }
 
 func newOutcome() *Outcome {
@@ -86,6 +90,9 @@ func newOutcome() *Outcome {
 		UngroundedDowngrades: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "aiops_ungrounded_downgrades_total",
 			Help: "Hypotheses downgraded for lacking real-time evidence (model quality signal)"}),
+		GoldenCasesPromoted: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "aiops_golden_cases_promoted_total",
+			Help: "Investigations promoted to pending golden cases from human feedback"}),
 	}
 }
 
@@ -93,7 +100,7 @@ func (o *Outcome) collectors() []prometheus.Collector {
 	return []prometheus.Collector{
 		o.TokensTotal, o.CostUSDTotal, o.TokensPerInv, o.CostPerInv,
 		o.ToolCallsPerInv, o.DiagnosisLatency, o.DiagnosisPublished,
-		o.HumanFeedback, o.UngroundedDowngrades,
+		o.HumanFeedback, o.UngroundedDowngrades, o.GoldenCasesPromoted,
 	}
 }
 
@@ -147,4 +154,12 @@ func (m *Metrics) IncHumanFeedback(action string) {
 		action = "unknown"
 	}
 	m.outcome.HumanFeedback.WithLabelValues(action).Inc()
+}
+
+// IncGoldenCasePromoted 记录一次评测用例提升(反馈闭环)。
+func (m *Metrics) IncGoldenCasePromoted() {
+	if m == nil || m.outcome == nil {
+		return
+	}
+	m.outcome.GoldenCasesPromoted.Inc()
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aiops/control-plane/internal/auth"
@@ -179,6 +180,16 @@ func (a *PublicAPI) postFeedback(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 反馈闭环:confirm/correct 意味着人给出了**标注真值**(根因是什么),
+	// 那正是 Golden Case 需要的东西。提升为 pending 用例,等人审核后入评测集。
+	//
+	// 只在这两种动作时提升:reject 表示结论错但没说对的是什么(没有真值),
+	// close 只是流程动作。confirm 未填 confirmed_root_cause 时退回诊断摘要 ——
+	// 人点了"确认"就意味着认可那个结论。
+	if body.Action == "confirm" || body.Action == "correct" {
+		a.promoteGoldenCase(r, inv, inc, body.ConfirmedRootCause, body.Author)
+	}
+
 	// close:关闭调查与 Incident
 	if body.Action == "close" {
 		_ = a.store.SetInvestigationPhase(r.Context(), id, "closed")
@@ -197,3 +208,55 @@ func (a *PublicAPI) postFeedback(w http.ResponseWriter, r *http.Request) {
 }
 
 var _ = context.Background
+
+// promoteGoldenCase 把调查提升为待审评测用例。失败只记日志:
+// 反馈本身已经落库,提升是**增强** —— 它失败不该让反馈提交失败。
+func (a *PublicAPI) promoteGoldenCase(r *http.Request, inv model.Investigation,
+	inc model.Incident, confirmedRootCause, author string) {
+	rootCause := strings.TrimSpace(confirmedRootCause)
+	if rootCause == "" && inv.Diagnosis != nil {
+		// confirm 未填根因:人点了"确认"即认可诊断结论,用**排名第一的假设陈述**
+		// 作为标注真值 —— 那正是他确认的那句话。
+		// 不用 ConfirmedFacts:那是证据陈述,不是根因判断。
+		rootCause = topHypothesisStatement(inv.Diagnosis)
+	}
+	if rootCause == "" {
+		a.log.Info("skip golden case promotion: 无标注真值",
+			"investigation_id", inv.InvestigationID)
+		return
+	}
+	caseID, created, err := a.store.PromoteInvestigationToGoldenCase(
+		r.Context(), inv, inc, rootCause, author)
+	if err != nil {
+		a.log.Warn("promote golden case failed(反馈已保存,不影响)",
+			"investigation_id", inv.InvestigationID, "err", err)
+		return
+	}
+	if created {
+		a.store.Audit(r.Context(), inv.TenantID, author, "golden_case_promoted",
+			"golden_case", caseID, "ok", nil,
+			map[string]any{"investigation_id": inv.InvestigationID, "review_status": "pending"})
+		a.log.Info("golden case promoted (pending review)",
+			"case_id", caseID, "investigation_id", inv.InvestigationID)
+		if a.goldenMet != nil {
+			a.goldenMet.IncGoldenCasePromoted()
+		}
+	}
+}
+
+// topHypothesisStatement 取排名最高(rank 最小)的假设陈述。
+// rank 未设置(全为 0)时退回列表首项。
+func topHypothesisStatement(d *model.DiagnosisResult) string {
+	best := ""
+	bestRank := 0
+	for _, h := range d.Hypotheses {
+		st := strings.TrimSpace(h.Statement)
+		if st == "" {
+			continue
+		}
+		if best == "" || (h.Rank > 0 && (bestRank == 0 || h.Rank < bestRank)) {
+			best, bestRank = st, h.Rank
+		}
+	}
+	return best
+}

@@ -272,7 +272,7 @@ func main() {
 
 	agentScope := auth.AgentServiceScope{Clusters: []string{cfg.ClusterID}}
 	publicAPI := api.NewPublicAPI(st, ingress, orch, wf, authn, agentScope, cfg.CORSOrigins, log).
-		WithFeedbackMetrics(metrics)
+		WithFeedbackMetrics(metrics).WithGoldenMetrics(metrics).WithTenant(cfg.Tenant)
 	// 成效与成本指标(F10):usage 此前只落库、从不导出,模型花了多少钱、
 	// 诊断多快、结论被采纳多少,在 Prometheus 上完全不可见。
 	internalAPI := api.NewInternalAPI(st, gw, cfg.InternalToken, cfg.IsProduction(), metrics.Handler(), log).
