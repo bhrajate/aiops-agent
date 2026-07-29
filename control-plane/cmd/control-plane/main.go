@@ -35,6 +35,7 @@ import (
 	"github.com/aiops/control-plane/internal/store"
 	"github.com/aiops/control-plane/internal/telemetry"
 	"github.com/aiops/control-plane/internal/temporalx"
+	"github.com/aiops/control-plane/internal/topology"
 	"github.com/aiops/control-plane/internal/trigger"
 )
 
@@ -217,6 +218,27 @@ func main() {
 	// ---- 组件装配 ----
 	gw := gateway.New(st, agents, obsClient, rawStore, metrics, log)
 	mgr := incident.New(st, cfg.CorrelationWindowSec, metrics, log)
+	// 拓扑关联:回填 topology_refs(此前恒为 '[]')并链接调用链上相邻的活跃 incident。
+	// 只在 ingest 角色启用增强(它在信号处理路径上),同步循环单独按 topology 角色。
+	var topoSyncer *topology.Syncer
+	if cfg.TopologyEnabled {
+		corr := topology.New(st, topology.Config{
+			MaxEdgeAgeSec:     cfg.TopologyMaxEdgeAge,
+			MinConfidence:     cfg.TopologyMinConf,
+			MinLinkConfidence: cfg.TopologyMinLinkConf,
+		}, log)
+		mgr = mgr.WithTopology(corr)
+		// 同步依赖 Prometheus(Tempo 的 service graph 指标落在那里)。
+		// 用 mock 数据源时不启用:那会把假拓扑写进库,而假拓扑会产出
+		// 看似合理的错误关联 —— 比没有拓扑更糟。
+		if live, ok := obsQuerier.(*obsquery.Client); ok && live.HasPrometheus() {
+			topoSyncer = topology.NewSyncer(st, live, cfg.Tenant, cfg.ClusterID,
+				time.Duration(cfg.TopologySyncSec)*time.Second, log).WithMetrics(metrics)
+		} else {
+			log.Warn("拓扑同步未启用:需要真实 Prometheus(mock 数据源会写入假拓扑," +
+				"而假拓扑会产出看似合理的错误关联)")
+		}
+	}
 	// 自动触发策略(F7):此前一律触发,每个 incident 都烧一次 triage 调用。
 	// 跳过的仍入库、仍可人工发起调查,并写审计 + 指标。
 	autoPolicy := trigger.AutoPolicyConfig{
@@ -333,6 +355,7 @@ func main() {
 			AuditDays:       cfg.Retention.AuditDays,
 			OutboxDays:      cfg.Retention.OutboxDays,
 			DeadLetterDays:  cfg.Retention.DeadLetterDays,
+			TopologyDays:    cfg.Retention.TopologyDays,
 			IdempotencyDays: cfg.Retention.IdempotencyDays,
 			CaseDays:        cfg.Retention.CaseDays,
 			IntervalSec:     cfg.Retention.IntervalSec,
@@ -340,6 +363,14 @@ func main() {
 		}, metrics, log)
 		wg.Add(1)
 		go func() { defer wg.Done(); jan.Run(ctx) }()
+	}
+
+	// ---- 拓扑同步(role: topology)----
+	// 独立角色:它是周期性外部查询,与信号处理无关,拆开可单独伸缩/关闭。
+	// 多副本同时同步是安全的(upsert 幂等),但没必要 —— 生产建议只给一个副本这个角色。
+	if topoSyncer != nil && cfg.HasRole("topology") {
+		wg.Add(1)
+		go func() { defer wg.Done(); topoSyncer.Run(ctx) }()
 	}
 
 	// ---- HTTP 服务(role: api / internal)----

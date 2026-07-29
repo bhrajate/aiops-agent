@@ -20,6 +20,8 @@ type Metrics struct {
 	RetentionPurged       *prometheus.CounterVec   // 按 target 维度
 	IngressThrottled      *prometheus.CounterVec   // 按 tenant 维度
 	TriggerDecisions      *prometheus.CounterVec   // 按 triggered、reason 维度
+	TopologyEdges         prometheus.Gauge         // 最近一次同步的边数
+	TopologySyncErrors    prometheus.Counter       // 同步失败次数
 	outcome               *Outcome                 // 成效与成本(F10),见 outcome.go
 	reg                   *prometheus.Registry
 }
@@ -55,12 +57,21 @@ func New() *Metrics {
 			Name: "aiops_trigger_decisions_total",
 			Help: "Auto-trigger policy decisions by outcome and reason"},
 			[]string{"triggered", "reason"}),
+		// 拓扑同步可观测性。边数用 Gauge:它是存量而非增量,
+		// 且"突然掉到 0"正是 metrics-generator 挂了的信号。
+		TopologyEdges: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aiops_topology_edges",
+			Help: "Service dependency edges from the last successful sync"}),
+		TopologySyncErrors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "aiops_topology_sync_errors_total",
+			Help: "Topology sync failures"}),
 		outcome: newOutcome(),
 		reg:     reg,
 	}
 	reg.MustRegister(m.SignalsIngested, m.IncidentsCreated, m.InvestigationsStarted,
 		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials,
-		m.RetentionPurged, m.IngressThrottled, m.TriggerDecisions)
+		m.RetentionPurged, m.IngressThrottled, m.TriggerDecisions,
+		m.TopologyEdges, m.TopologySyncErrors)
 	reg.MustRegister(m.outcome.collectors()...)
 	// Go runtime + process 指标
 	reg.MustRegister(prometheus.NewGoCollector())
@@ -113,6 +124,18 @@ func (m *Metrics) IncIngressThrottled(tenant string) {
 	if m != nil {
 		m.IngressThrottled.WithLabelValues(tenant).Inc()
 	}
+}
+
+// ObserveTopologySync 记录一次拓扑同步结果。
+func (m *Metrics) ObserveTopologySync(edges int, err error) {
+	if m == nil {
+		return
+	}
+	if err != nil {
+		m.TopologySyncErrors.Inc()
+		return // 失败时**不更新**边数:写 0 会与"真的没有边"混淆
+	}
+	m.TopologyEdges.Set(float64(edges))
 }
 
 // IncTriggerDecision 记录一次自动触发决策(F7)。

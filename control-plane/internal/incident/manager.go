@@ -20,11 +20,28 @@ type IncidentMetrics interface {
 	IncIncident(severity, category string)
 }
 
+// TopologyEnricher 用服务依赖拓扑丰富 incident(回填 topology_refs、
+// 链接拓扑相邻的活跃 incident)。可为 nil。
+//
+// 用接口而非直接依赖 topology 包:topology 依赖 store,而 incident 也依赖 store;
+// 让 incident 直接 import topology 会把这条链拉长,且测试里替换困难。
+type TopologyEnricher interface {
+	Enrich(ctx context.Context, inc model.Incident)
+}
+
 type Manager struct {
 	store                *store.Store
 	correlationWindowSec int
-	metrics              IncidentMetrics // 可为 nil(降级)
+	metrics              IncidentMetrics  // 可为 nil(降级)
+	topo                 TopologyEnricher // 可为 nil(未启用拓扑)
 	log                  *slog.Logger
+}
+
+// WithTopology 注入拓扑增强器。分开设置而非加构造参数:
+// New 已有 4 个参数,且拓扑是可选能力。
+func (m *Manager) WithTopology(t TopologyEnricher) *Manager {
+	m.topo = t
+	return m
 }
 
 func New(s *store.Store, correlationWindowSec int, metrics IncidentMetrics, log *slog.Logger) *Manager {
@@ -75,6 +92,12 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 	// 且会让"有信号但无 incident 产出"这条断链告警失去意义。
 	if created && m.metrics != nil {
 		m.metrics.IncIncident(agg.Severity, agg.FaultCategory)
+	}
+	// 拓扑关联:回填 topology_refs 并链接调用链上相邻的活跃 incident。
+	// 放在**事务之外**是刻意的:它要发起额外查询,塞进入库事务会拉长持锁时间;
+	// 且它是增强而非必需 —— 失败只丢一次关联,绝不该让信号处理失败。
+	if m.topo != nil {
+		m.topo.Enrich(ctx, agg)
 	}
 	if err := m.store.AttachSignalToIncident(ctx, sig.SignalID, agg.IncidentID); err != nil {
 		m.log.Warn("attach signal failed", "err", err)

@@ -21,6 +21,7 @@ type Store interface {
 	PurgePublishedOutbox(ctx context.Context, days, batch int) (int64, error)
 	PurgeOrphanSignals(ctx context.Context, days, batch int) (int64, error)
 	PurgeClosedCases(ctx context.Context, days, batch int) (int64, int64, error)
+	PurgeStaleTopology(ctx context.Context, days, batch int) (int64, error)
 }
 
 // Metrics 抽象清理指标(nil-safe)。
@@ -30,11 +31,14 @@ type Metrics interface {
 
 // Config 保留期配置(天;<=0 表示不清理该项)。
 type Config struct {
-	SignalDays      int
-	EventDays       int
-	AuditDays       int
-	OutboxDays      int
-	DeadLetterDays  int
+	SignalDays     int
+	EventDays      int
+	AuditDays      int
+	OutboxDays     int
+	DeadLetterDays int
+	// TopologyDays 陈旧拓扑边的保留天数。边由周期同步刷新 last_seen,
+	// 长期不刷新意味着该依赖已消失(服务下线)。清掉它们避免关联到不存在的服务。
+	TopologyDays    int
 	IdempotencyDays int
 	CaseDays        int
 
@@ -114,6 +118,9 @@ func (j *Janitor) RunOnce(ctx context.Context) error {
 		}},
 		{"dead_letters", j.cfg.DeadLetterDays, func(c context.Context, d, b int) (int64, error) {
 			return j.store.PurgeOlderThan(c, "dead_letters", "created_at", d, b)
+		}},
+		{"service_topology", j.cfg.TopologyDays, func(c context.Context, d, b int) (int64, error) {
+			return j.store.PurgeStaleTopology(c, d, b)
 		}},
 		{"idempotency_keys", j.cfg.IdempotencyDays, func(c context.Context, d, b int) (int64, error) {
 			return j.store.PurgeOlderThan(c, "idempotency_keys", "created_at", d, b)

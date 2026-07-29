@@ -41,7 +41,7 @@ var migrationsFS embed.FS
 //
 // 新增迁移时**必须**同步 +1。TestExpectedMatchesFiles 会校验二者一致,
 // 忘记改就会在 CI 失败,而不是在生产启动时才发现。
-const Expected uint = 5
+const Expected uint = 6
 
 // ErrVersionMismatch 表示库的 schema 版本与本二进制期望的不一致。
 type ErrVersionMismatch struct {

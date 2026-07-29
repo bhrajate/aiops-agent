@@ -27,6 +27,23 @@ func ServiceKey(r ResourceRef) string {
 	return r.Namespace + "/" + name
 }
 
+// WorkloadName 返回**不带命名空间前缀**的工作负载名(Pod 已归约)。
+//
+// 与 ServiceKey 的区别只在前缀,但这个区别很要紧:拓扑边(service_topology)
+// 存的是裸服务名(Tempo 的 client/server 标签就是裸名),用 ServiceKey 的
+// "namespace/name" 去匹配会永远匹配不上,拓扑关联静默失效 ——
+// 与 F3 修过的 blast_radius 同一类坑(口径不一致导致的静默失配)。
+func WorkloadName(r ResourceRef) string {
+	name := strings.TrimSpace(r.Name)
+	if name == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Kind), "Pod") {
+		name = workloadNameFromPod(name)
+	}
+	return name
+}
+
 // workloadNameFromPod 从 Pod 名推导其工作负载名。
 //
 //	Deployment  order-api-7d9f8bc4f5-x2k9p -> order-api   (剥 rs-hash + 随机后缀)

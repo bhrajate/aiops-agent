@@ -89,12 +89,20 @@ func (a *InternalAPI) getContext(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "incident not found")
 		return
 	}
+	// 拓扑关联的 incident:planner 据此知道"上游还有个故障",
+	// 能把假设指向调用链而不是只在本服务里找。取不到不致命(拓扑是增强)。
+	relations, rerr := a.store.RelationsOf(r.Context(), inv.IncidentID)
+	if rerr != nil {
+		a.log.Warn("load incident relations failed", "incident_id", inv.IncidentID, "err", rerr)
+		relations = nil
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"incident":      inc,
 		"investigation": inv,
 		"signals":       []any{}, // 首版从 incident 派生,signals 明细可扩展
 		"topology":      inc.TopologyRefs,
 		"changes":       inc.ChangeRefs,
+		"relations":     relations,
 	})
 }
 

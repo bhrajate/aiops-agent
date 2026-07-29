@@ -94,6 +94,15 @@ type Config struct {
 	ReconcileGraceSec    int
 	ReconcileIntervalSec int
 
+	// 服务依赖拓扑(拓扑关联)。topology_refs 此前恒为 '[]' —— 相关性合并只按
+	// tenant|cluster|namespace,调用链上的故障传播识别不了。
+	// 边从 Tempo service graph 指标同步(需 Tempo 启用 metrics-generator)。
+	TopologyEnabled     bool
+	TopologySyncSec     int     // 同步间隔
+	TopologyMaxEdgeAge  int     // 边的最大年龄(秒);超过视为已下线
+	TopologyMinConf     float64 // 进入 topology_refs 的最低置信度
+	TopologyMinLinkConf float64 // 链接 incident 的最低置信度(更严)
+
 	// 自动触发策略(F7)。此前 EvaluateAuto 四个分支全返回 true(伪装成策略的
 	// 常量),每个 incident 都消耗一次 triage 模型调用,含 P4 单信号。
 	// 跳过的 incident 仍入库、仍可人工发起调查,且会写审计与指标。
@@ -119,13 +128,16 @@ type Config struct {
 	CORSOrigins []string
 
 	// 角色:控制哪些子系统在本进程启用,实现按角色拆分部署单元。
-	// 取值(逗号分隔):api / internal / ingest / trigger / outbox / janitor,或 all(默认)。
+	// 取值(逗号分隔):api / internal / ingest / trigger / outbox / janitor /
+	// topology / slo,或 all(默认)。
 	//   api      公共 API(:8088,前端与 webhook 入口)
 	//   internal 内部 API(:8090,Tool Gateway + AI Worker 回写)
 	//   ingest   signals consumer → Incident Manager(两层聚合)
 	//   trigger  incidents consumer → Trigger Policy/Orchestrator
 	//   outbox   Outbox 投递循环
 	//   janitor  数据保留清理(多副本下靠 advisory lock 互斥)
+	//   topology 服务依赖拓扑同步(周期性查 Tempo service graph 指标)
+	//   slo      SLO 燃尽率监视(主动异常检测,合成 signal 进入既有管道)
 	Roles []string
 
 	// 信号入口限流(F6):按租户令牌桶,按**信号条数**计费。
@@ -154,6 +166,7 @@ type RetentionConfig struct {
 	AuditDays       int // audit_log(合规相关,默认最长)
 	OutboxDays      int // 已发布的 outbox 记录
 	DeadLetterDays  int // 死信
+	TopologyDays    int // 陈旧拓扑边(服务下线后边停止刷新)
 	IdempotencyDays int // 幂等键(短生命周期)
 	// CaseDays 终态 incident 及其级联数据(investigations/evidence/hypotheses/
 	// alert_groups/human_feedback)的保留天数。
@@ -265,6 +278,17 @@ func Load() Config {
 		ReconcileGraceSec:    getint("AIOPS_RECONCILE_GRACE_SEC", 60),
 		ReconcileIntervalSec: getint("AIOPS_RECONCILE_INTERVAL_SEC", 60),
 
+		// 默认开启:未启用 Tempo metrics-generator 时同步查到 0 条边并告警一次,
+		// 不影响任何既有路径;而默认关闭会让这个能力事实上没人用。
+		TopologyEnabled:    getbool("AIOPS_TOPOLOGY_ENABLED", true),
+		TopologySyncSec:    getint("AIOPS_TOPOLOGY_SYNC_SEC", 300),
+		TopologyMaxEdgeAge: getint("AIOPS_TOPOLOGY_MAX_EDGE_AGE_SEC", 3600),
+		// 0.5:K8s Service selector 边(0.7)也进 topology_refs 供 planner 参考。
+		TopologyMinConf: getfloat("AIOPS_TOPOLOGY_MIN_CONFIDENCE", 0.5),
+		// 0.8:只有真实调用边(Tempo,0.9)足以链接 incident。selector 边只表达
+		// 入口关系,用它链接会把"同一 Service 后的两个无关工作负载"判为同源。
+		TopologyMinLinkConf: getfloat("AIOPS_TOPOLOGY_MIN_LINK_CONFIDENCE", 0.8),
+
 		AutoTriggerAll:              getbool("AIOPS_AUTO_TRIGGER_ALL", false),
 		AutoTriggerAlwaysSeverities: splitNonEmpty(strings.ToUpper(getenv("AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES", "P1,P2"))),
 		AutoTriggerSkipSeverities:   splitNonEmpty(strings.ToUpper(getenv("AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES", "P4"))),
@@ -283,12 +307,15 @@ func Load() Config {
 
 		Retention: RetentionConfig{
 			// 默认开启:无界增长是生产事故的常见来源,默认不清理等于默认埋雷。
-			Enabled:         getbool("AIOPS_RETENTION_ENABLED", true),
-			SignalDays:      getint("AIOPS_RETENTION_SIGNAL_DAYS", 30),
-			EventDays:       getint("AIOPS_RETENTION_EVENT_DAYS", 90),
-			AuditDays:       getint("AIOPS_RETENTION_AUDIT_DAYS", 365),
-			OutboxDays:      getint("AIOPS_RETENTION_OUTBOX_DAYS", 7),
-			DeadLetterDays:  getint("AIOPS_RETENTION_DEAD_LETTER_DAYS", 30),
+			Enabled:        getbool("AIOPS_RETENTION_ENABLED", true),
+			SignalDays:     getint("AIOPS_RETENTION_SIGNAL_DAYS", 30),
+			EventDays:      getint("AIOPS_RETENTION_EVENT_DAYS", 90),
+			AuditDays:      getint("AIOPS_RETENTION_AUDIT_DAYS", 365),
+			OutboxDays:     getint("AIOPS_RETENTION_OUTBOX_DAYS", 7),
+			DeadLetterDays: getint("AIOPS_RETENTION_DEAD_LETTER_DAYS", 30),
+			// 7 天:拓扑同步每 5 分钟一轮,7 天不刷新说明该依赖确实没了。
+			// 取太短会在 Tempo 短暂不可用时误删仍然存在的边。
+			TopologyDays:    getint("AIOPS_RETENTION_TOPOLOGY_DAYS", 7),
 			IdempotencyDays: getint("AIOPS_RETENTION_IDEMPOTENCY_DAYS", 7),
 			CaseDays:        getint("AIOPS_RETENTION_CASE_DAYS", 180),
 			IntervalSec:     getint("AIOPS_RETENTION_INTERVAL_SEC", 3600),

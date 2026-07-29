@@ -71,6 +71,11 @@ func (f *fakeStore) PurgeOrphanSignals(_ context.Context, days, batch int) (int6
 	return f.take("signals_orphan", batch), nil
 }
 
+func (f *fakeStore) PurgeStaleTopology(_ context.Context, days, batch int) (int64, error) {
+	f.calls = append(f.calls, call{"service_topology", days, batch})
+	return f.take("service_topology", batch), nil
+}
+
 func (f *fakeStore) PurgeClosedCases(_ context.Context, days, batch int) (int64, int64, error) {
 	f.calls = append(f.calls, call{"closed_cases", days, batch})
 	if f.casesLeft <= 0 {

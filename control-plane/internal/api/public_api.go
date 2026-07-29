@@ -188,8 +188,12 @@ func (a *PublicAPI) getIncident(w http.ResponseWriter, r *http.Request) {
 	invs, _ := a.store.ListInvestigationsByIncident(r.Context(), inc.IncidentID)
 	// 两层模型:alert_groups 是该 incident 下的去重单元明细(哪些资源/规则在告警)
 	groups, _ := a.store.ListAlertGroups(r.Context(), inc.IncidentID)
+	// 拓扑关联:值班人员据此看到"疑似与 inc-x 同源,它在调用链上游" ——
+	// 不合并 incident 而是链接,两边各自保留独立时间线(见 store/incidentrelations.go)。
+	relations, _ := a.store.RelationsOf(r.Context(), inc.IncidentID)
 	httpx.JSON(w, http.StatusOK, map[string]any{
 		"incident": inc, "investigations": invs, "alert_groups": groups,
+		"relations": relations,
 	})
 }
 
