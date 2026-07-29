@@ -104,10 +104,47 @@ AIOPS_S3_SECRET_KEY=minioadmin
 #   api / internal / ingest / trigger / outbox,或 all(默认全开=单体)
 #   例:API 副本 AIOPS_ROLES=api,internal;后台副本 AIOPS_ROLES=ingest,trigger,outbox
 AIOPS_ROLES=all
-# 观测后端集群维度 label 名(多集群共用一套 Prometheus/Loki/Tempo 时**必须**设置,
-# 否则只按 namespace 过滤会读到其他集群同名 namespace)。常见:cluster / cluster_id /
-# k8s_cluster;Tempo 侧资源属性常为 k8s.cluster.name。为空=后端本集群专用,不强制。
-AIOPS_CLUSTER_LABEL=cluster
+# 观测后端集群维度 label 名——**按后端分别配置**。
+#
+# 三个后端对"集群"的命名法互不兼容:
+#   Prometheus/Mimir : cluster            external_labels 注入;Grafana mixin
+#                                         用 per_cluster_label 暴露为可配
+#   Loki (Alloy)     : cluster            relabel 注入
+#   Loki (OTLP 原生) : k8s_cluster_name   OTel resource attribute 提升为索引 label;
+#                                         LogQL label 名须符合 Prometheus 命名法,
+#                                         故点号转下划线
+#   Tempo            : k8s.cluster.name   OTel 语义约定,原生保留点号
+#
+# 关键:**点号在 PromQL/LogQL 里是语法错误**,不只是"查不到数据"。所以单一值
+# 无法同时满足三者——配 cluster 则 Tempo 静默查空;配 k8s.cluster.name 则
+# Prometheus/Loki 每次查询都语法错。
+#
+# AIOPS_CLUSTER_LABEL 是全局回落值(向后兼容);下面三个按需覆盖。
+AIOPS_CLUSTER_LABEL=
+AIOPS_PROM_CLUSTER_LABEL=cluster
+AIOPS_LOKI_CLUSTER_LABEL=cluster
+AIOPS_TEMPO_CLUSTER_LABEL=k8s.cluster.name
+# 仅当观测后端确为**本集群专用**时设 true。要求显式表态而非留空即关闭:
+# 留空静默不隔离会让 RCA 读到其他集群同名 namespace 的数据,而这个错误在诊断
+# 结论里看不出来——证据齐全、逻辑自洽,只是来自错误的集群。
+AIOPS_CLUSTER_LABEL_DISABLED=false
+#
+# ⚠ 上线前必须对着**真实后端**核对这些名字。两类配错的表现完全不同:
+#
+#   (a) 名字合法但不匹配(实际是 cluster_id 却配了 cluster)
+#       → 后端**不报错**,只静默返回空结果。最难排查的那类:RCA 跑完了,
+#         证据一条也没采到,或全是降级提示,日志里没有任何异常。
+#         代码里判定不了,只能人工核对:
+#           Prometheus: curl -s <prom>/api/v1/labels | tr ',' '\n' | grep cluster
+#           Loki:       curl -s <loki>/loki/api/v1/labels | tr ',' '\n' | grep cluster
+#           Tempo:      取一条 trace,看 resource attributes 里集群字段实际叫什么
+#                       curl -s <tempo>/api/traces/<trace_id> | grep -o 'k8s\.cluster[^"]*'
+#         再确认该 label 的**取值**与 AIOPS_CLUSTER_ID 一致:
+#           curl -s '<prom>/api/v1/query?query=count%20by%20(cluster)%20(up)'
+#
+#   (b) 语法非法(点号给了 Prometheus/Loki)
+#       → 控制面**启动即拒绝**,并指名具体是哪个变量、该改成什么。
+#         不会拖到运行期每次查询才失败。
 # 共享可观测后端地址:由**控制面**直连(观测查询已从 cluster-agent 迁至控制面)。
 # 未配置则 query_metrics / search_logs / get_traces 被拒绝(denied)。
 AIOPS_PROM_URL=http://prometheus.observability.svc:9090

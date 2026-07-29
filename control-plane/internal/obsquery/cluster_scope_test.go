@@ -82,15 +82,36 @@ func TestScope_ClusterLabelEmpty_NotEnforced(t *testing.T) {
 }
 
 func TestLiveClusterScope(t *testing.T) {
-	// clusterLabel 配置后,clusterScope 返回带该 label 名的约束
-	l := &Client{clusterLabel: "cluster"}
-	cs := l.clusterScope(Scope{ClusterID: "prod-cn-1"})
-	if cs.Name != "cluster" || cs.Value != "prod-cn-1" {
-		t.Errorf("clusterScope 错误: %+v", cs)
+	// 三个后端各取自己的 label 名——这是本改动的核心:点号在 PromQL/LogQL 里是
+	// 语法错误,而 Tempo 的 OTel 语义约定恰恰用点号,共用一个值无法同时满足。
+	l := &Client{clusterLabels: ClusterLabels{
+		Prometheus: "cluster",
+		Loki:       "k8s_cluster_name",
+		Tempo:      "k8s.cluster.name",
+	}}
+	want := map[string]string{
+		BackendPrometheus: "cluster",
+		BackendLoki:       "k8s_cluster_name",
+		BackendTempo:      "k8s.cluster.name",
 	}
-	// 未配置则返回零值(不强制)
-	l2 := &Client{clusterLabel: ""}
-	if (l2.clusterScope(Scope{ClusterID: "x"}) != ScopeLabel{}) {
-		t.Error("未配置 clusterLabel 应返回零值")
+	for backend, wantName := range want {
+		cs := l.clusterScope(backend, Scope{ClusterID: "prod-cn-1"})
+		if cs.Name != wantName || cs.Value != "prod-cn-1" {
+			t.Errorf("%s 的 clusterScope 错误: got %+v, want name=%q", backend, cs, wantName)
+		}
+	}
+
+	// 某后端未配置则该后端返回零值(不强制),不影响其他后端。
+	partial := &Client{clusterLabels: ClusterLabels{Prometheus: "cluster"}}
+	if (partial.clusterScope(BackendTempo, Scope{ClusterID: "x"}) != ScopeLabel{}) {
+		t.Error("未配置的后端应返回零值")
+	}
+	if partial.clusterScope(BackendPrometheus, Scope{ClusterID: "x"}).Name != "cluster" {
+		t.Error("已配置的后端不应受其他后端未配置影响")
+	}
+
+	// 未知后端返回零值,不会误注入。
+	if (partial.clusterScope("elasticsearch", Scope{ClusterID: "x"}) != ScopeLabel{}) {
+		t.Error("未知后端应返回零值")
 	}
 }

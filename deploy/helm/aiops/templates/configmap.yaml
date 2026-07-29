@@ -19,6 +19,18 @@ data:
   AIOPS_CLUSTER_AGENT_URL: {{ include "aiops.clusterAgentUrl" . | quote }}
   AIOPS_CONTROL_INTERNAL_URL: {{ include "aiops.controlInternalUrl" . | quote }}
   AIOPS_CLUSTER_ID: {{ .Values.config.clusterId | quote }}
+  # 共享观测后端(控制面直连)。生产必须至少配一个,否则启动校验拒绝
+  # ——未配置会回退 mock,产出确定性假证据。
+  AIOPS_PROM_URL: {{ .Values.config.prometheusUrl | quote }}
+  AIOPS_LOKI_URL: {{ .Values.config.lokiUrl | quote }}
+  AIOPS_TEMPO_URL: {{ .Values.config.tempoUrl | quote }}
+  # 集群维度 label 名,**按后端分别配置**:三者命名法不同,且点号在 PromQL/LogQL
+  # 里是语法错误,单一值无法同时满足(详见 values.yaml 注释与 docs/INTEGRATION.md)。
+  AIOPS_CLUSTER_LABEL: {{ .Values.config.clusterLabel | quote }}
+  AIOPS_PROM_CLUSTER_LABEL: {{ .Values.config.promClusterLabel | quote }}
+  AIOPS_LOKI_CLUSTER_LABEL: {{ .Values.config.lokiClusterLabel | quote }}
+  AIOPS_TEMPO_CLUSTER_LABEL: {{ .Values.config.tempoClusterLabel | quote }}
+  AIOPS_CLUSTER_LABEL_DISABLED: {{ .Values.config.clusterLabelDisabled | quote }}
   AIOPS_TENANT: {{ .Values.config.tenant | quote }}
   AIOPS_AUTH_MODE: {{ .Values.config.authMode | quote }}
   AIOPS_OIDC_AUDIENCE: {{ .Values.config.oidcAudience | quote }}

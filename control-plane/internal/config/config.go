@@ -42,10 +42,18 @@ type Config struct {
 	PrometheusURL string
 	LokiURL       string
 	TempoURL      string
-	ClusterLabel  string
-	InternalURL   string // 供 AI Worker 回写的内部 API base(下发给 workflow)
-	ClusterID     string
-	Tenant        string
+	// ClusterLabel 是全局回落值;各后端命名法不同,可用下面三个专属变量分别覆盖
+	// (详见 internal/obsquery/clusterlabel.go)。
+	ClusterLabel      string
+	PromClusterLabel  string
+	LokiClusterLabel  string
+	TempoClusterLabel string
+	// ClusterLabelDisabled 显式声明"后端为单集群专用,无需集群维度隔离"。
+	// 要求显式表态而非留空即关闭,见 Validate。
+	ClusterLabelDisabled bool
+	InternalURL          string // 供 AI Worker 回写的内部 API base(下发给 workflow)
+	ClusterID            string
+	Tenant               string
 
 	// 认证(SECURITY §1)
 	AuthMode     string // hs256 | oidc | disabled
@@ -191,21 +199,25 @@ func Load() Config {
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
 	return Config{
-		Env:              getenv("AIOPS_ENV", "development"),
-		PublicAddr:       getenv("AIOPS_PUBLIC_ADDR", ":8088"),
-		InternalAddr:     getenv("AIOPS_INTERNAL_ADDR", ":8090"),
-		DBDSN:            getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
-		AutoMigrate:      getbool("AIOPS_AUTO_MIGRATE", false),
-		KafkaBrokers:     brokers,
-		TemporalHostPort: getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
-		TemporalNS:       getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
-		TemporalQueue:    getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
-		ClusterAgentURL:  getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
-		ClusterAgents:    getenv("AIOPS_CLUSTER_AGENTS", ""),
-		ClusterLabel:     getenv("AIOPS_CLUSTER_LABEL", ""),
-		InternalURL:      getenv("AIOPS_CONTROL_INTERNAL_URL", "http://localhost:8090"),
-		ClusterID:        getenv("AIOPS_CLUSTER_ID", "prod-cn-1"),
-		Tenant:           getenv("AIOPS_TENANT", "default"),
+		Env:                  getenv("AIOPS_ENV", "development"),
+		PublicAddr:           getenv("AIOPS_PUBLIC_ADDR", ":8088"),
+		InternalAddr:         getenv("AIOPS_INTERNAL_ADDR", ":8090"),
+		DBDSN:                getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
+		AutoMigrate:          getbool("AIOPS_AUTO_MIGRATE", false),
+		KafkaBrokers:         brokers,
+		TemporalHostPort:     getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
+		TemporalNS:           getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
+		TemporalQueue:        getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
+		ClusterAgentURL:      getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
+		ClusterAgents:        getenv("AIOPS_CLUSTER_AGENTS", ""),
+		ClusterLabel:         getenv("AIOPS_CLUSTER_LABEL", ""),
+		PromClusterLabel:     getenv("AIOPS_PROM_CLUSTER_LABEL", ""),
+		LokiClusterLabel:     getenv("AIOPS_LOKI_CLUSTER_LABEL", ""),
+		TempoClusterLabel:    getenv("AIOPS_TEMPO_CLUSTER_LABEL", ""),
+		ClusterLabelDisabled: getbool("AIOPS_CLUSTER_LABEL_DISABLED", false),
+		InternalURL:          getenv("AIOPS_CONTROL_INTERNAL_URL", "http://localhost:8090"),
+		ClusterID:            getenv("AIOPS_CLUSTER_ID", "prod-cn-1"),
+		Tenant:               getenv("AIOPS_TENANT", "default"),
 
 		AuthMode:     getenv("AIOPS_AUTH_MODE", "hs256"),
 		HS256Secret:  getenv("AIOPS_AUTH_HS256_SECRET", DefaultHS256Secret),
@@ -276,6 +288,11 @@ func splitNonEmpty(s string) []string {
 	return out
 }
 
+// hasPerBackendClusterLabel 报告是否至少配了一个后端专属集群 label。
+func (c Config) hasPerBackendClusterLabel() bool {
+	return c.PromClusterLabel != "" || c.LokiClusterLabel != "" || c.TempoClusterLabel != ""
+}
+
 // IsProduction 报告是否处于生产模式(触发严格校验)。
 func (c Config) IsProduction() bool {
 	return strings.EqualFold(c.Env, "production") || strings.EqualFold(c.Env, "prod")
@@ -324,9 +341,15 @@ func (c Config) Validate() error {
 			problems = append(problems,
 				"生产模式必须配置至少一个观测后端(AIOPS_PROM_URL / AIOPS_LOKI_URL / AIOPS_TEMPO_URL),否则将回退到 mock 假证据")
 		}
-		if c.ClusterLabel == "" {
+		// 集群维度隔离:三个后端命名法不同,可用全局 AIOPS_CLUSTER_LABEL 一把配,
+		// 也可用后端专属变量分别配(Tempo 通常需要,它用 OTel 的 k8s.cluster.name)。
+		// 若后端确为单集群专用,必须**显式**声明 DISABLED——留空静默不隔离会让 RCA
+		// 读到其他集群同名 namespace 的数据,而这个错误在诊断结论里看不出来。
+		if c.ClusterLabel == "" && !c.hasPerBackendClusterLabel() && !c.ClusterLabelDisabled {
 			problems = append(problems,
-				"生产模式必须设置 AIOPS_CLUSTER_LABEL(共享观测后端下用于按集群隔离,否则会跨集群串数据)")
+				"生产模式必须配置集群维度隔离:设 AIOPS_CLUSTER_LABEL,"+
+					"或按后端设 AIOPS_{PROM,LOKI,TEMPO}_CLUSTER_LABEL;"+
+					"若后端确为单集群专用,显式设 AIOPS_CLUSTER_LABEL_DISABLED=true")
 		}
 	}
 

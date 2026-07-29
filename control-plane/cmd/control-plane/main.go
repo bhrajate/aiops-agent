@@ -179,14 +179,27 @@ func main() {
 	// 这些后端是多集群共用的中心服务,不在任一 K8s 集群内,因此不再绕经集群 agent:
 	// 少一跳网络、少一个必经故障点(故障时不会同时失去 metrics/logs/traces)、
 	// 凭据只此一份。查询仍在 Gateway 之后,范围注入/脱敏/审计/预算一律不变。
+	// 集群 label 名按后端各自的命名法校验(点号在 PromQL/LogQL 里是语法错误,
+	// 而 Tempo 的 OTel 语义约定恰恰用点号)。语法非法在此 fail-fast,
+	// 而不是留到运行期每次查询都失败。
+	clusterLabels := obsquery.ConfigFromEnv().ClusterLabels
+	if err := clusterLabels.Validate(); err != nil {
+		log.Error("集群 label 配置非法", "err", err)
+		os.Exit(1)
+	}
 	obsQuerier, obsMode := obsquery.FromEnv()
 	obsClient := gateway.ObsQuerier(obsQuerier)
 	if obsMode == "live" {
 		log.Info("observability backends connected directly", "mode", obsMode,
-			"cluster_label", cfg.ClusterLabel)
-		if cfg.ClusterLabel == "" {
-			log.Warn("AIOPS_CLUSTER_LABEL 未设置:共享后端下无法按集群隔离," +
-				"不同集群的同名 namespace 可能混淆")
+			"cluster_labels", clusterLabels.Describe())
+		// 各后端都有非空默认值,所以经环境变量**唯一**能出现"不强制"的路径是
+		// 显式 DISABLED。这条路径值得一条醒目告警:它把跨集群串数据的可能性
+		// 交给了"后端确为单集群专用"这个人工判断,判断错了在诊断结论里看不出来
+		// ——证据齐全、逻辑自洽,只是来自错误的集群。
+		if len(clusterLabels.Unenforced()) > 0 {
+			log.Warn("集群维度隔离已显式关闭(AIOPS_CLUSTER_LABEL_DISABLED=true):" +
+				"仅当观测后端确为本集群专用时才安全;若为多集群共享后端," +
+				"RCA 会读到其他集群的同名 namespace")
 		}
 	} else {
 		log.Warn("observability datasource is MOCK (no AIOPS_PROM_URL/LOKI_URL/TEMPO_URL); " +

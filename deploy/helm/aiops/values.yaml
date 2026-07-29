@@ -21,6 +21,34 @@ rbac:
 # ---- 非敏感配置(渲染进 ConfigMap aiops-config)----
 config:
   clusterId: "prod-cn-1"
+
+  # ---- 共享观测后端(控制面直连 Prometheus/Loki/Tempo)----
+  # 生产必须至少配一个:未配置会回退 mock 数据源,产出确定性假证据,
+  # 而 RCA 会基于虚构数据给出"有证据支撑"的结论。启动校验会拒绝这种配置。
+  prometheusUrl: ""
+  lokiUrl: ""
+  tempoUrl: ""
+
+  # ---- 集群维度 label 名(按后端分别配置)----
+  # 三个后端对"集群"的命名法互不兼容:
+  #   Prometheus/Mimir : cluster            external_labels 注入
+  #   Loki (Alloy)     : cluster            relabel 注入
+  #   Loki (OTLP 原生) : k8s_cluster_name   LogQL label 名须符合 Prom 命名法,点号转下划线
+  #   Tempo            : k8s.cluster.name   OTel 语义约定,原生保留点号
+  # 点号在 PromQL/LogQL 里是**语法错误**,所以单一值无法同时满足三者
+  # (配 cluster → Tempo 静默查空;配 k8s.cluster.name → Prom/Loki 每次查询语法错)。
+  #
+  # clusterLabel 是全局回落值;下面三个按需覆盖。留空则用各后端内置默认值。
+  #
+  # ⚠ 上线前必须对着真实后端核对(核对命令见 docs/INTEGRATION.md):名字写错
+  #   不会报错,只会**静默查不到数据**。语法非法(如点号给了 Prom)则启动即失败。
+  clusterLabel: ""
+  promClusterLabel: "cluster"
+  lokiClusterLabel: "cluster"
+  tempoClusterLabel: "k8s.cluster.name"
+  # 仅当观测后端确为**本集群专用**时才设 true。多集群共享后端下设 true
+  # 会让 RCA 读到其他集群的同名 namespace,且该错误在诊断结论里看不出来。
+  clusterLabelDisabled: false
   tenant: "default"
   publicAddr: ":8088"
   internalAddr: ":8090"

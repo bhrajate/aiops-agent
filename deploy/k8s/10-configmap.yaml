@@ -84,4 +84,17 @@ data:
   # 后端中区分集群的 label / tag 名。多集群共用一套后端时**必须**设置,
   # 否则只按 namespace 过滤会读到其他集群的同名 namespace。
   # 常见:cluster / cluster_id / k8s_cluster(Tempo 侧常为 k8s.cluster.name)。
+  # 集群维度 label 名——**按后端分别配置**,因为三者命名法不同:
+  #   Prometheus/Mimir : cluster            (external_labels 注入)
+  #   Loki (Alloy)     : cluster            (relabel 注入)
+  #   Loki (OTLP 原生) : k8s_cluster_name   (LogQL label 名须符合 Prom 命名法,点号转下划线)
+  #   Tempo            : k8s.cluster.name   (OTel 语义约定,原生保留点号)
+  # 点号在 PromQL/LogQL 里是**语法错误**,所以单一值无法同时满足三者。
+  # AIOPS_CLUSTER_LABEL 作为全局回落值;下面三个专属变量按需覆盖。
+  #
+  # ⚠ 上线前必须对着真实后端核对这些名字(核对命令见 docs/INTEGRATION.md)。
+  #   名字写错不会报错,只会**静默查不到数据**——最难排查的那类故障。
   AIOPS_CLUSTER_LABEL: "cluster"
+  AIOPS_PROM_CLUSTER_LABEL: "cluster"
+  AIOPS_LOKI_CLUSTER_LABEL: "cluster"
+  AIOPS_TEMPO_CLUSTER_LABEL: "k8s.cluster.name"

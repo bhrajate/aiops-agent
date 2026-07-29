@@ -13,11 +13,13 @@ type Config struct {
 	PrometheusURL string
 	LokiURL       string
 	TempoURL      string
-	// ClusterLabel 是后端中区分集群的 label / tag 名(cluster / cluster_id /
-	// k8s_cluster;Tempo 侧常为 k8s.cluster.name)。
-	// **多集群共用一套后端时必须设置**,否则只按 namespace 过滤会读到其他集群
-	// 的同名 namespace。为空表示后端为单集群专用,不做集群维度约束。
+	// ClusterLabel 是**全局回落**的集群 label 名。三个后端命名法不同
+	// (Prometheus/Loki 用 cluster,Tempo 用 k8s.cluster.name),
+	// 多后端场景应改用 ClusterLabels 按后端分别指定;此字段仅作回落与向后兼容。
 	ClusterLabel string
+	// ClusterLabels 按后端指定集群 label 名。空字段回落到 ClusterLabel;
+	// 两者都为空表示该后端不做集群维度约束(见 clusterlabel.go)。
+	ClusterLabels ClusterLabels
 	// HTTPTimeout 约束每次上游调用。零值 -> 15s。
 	HTTPTimeout time.Duration
 }
@@ -29,6 +31,7 @@ func ConfigFromEnv() Config {
 		LokiURL:       os.Getenv("AIOPS_LOKI_URL"),
 		TempoURL:      os.Getenv("AIOPS_TEMPO_URL"),
 		ClusterLabel:  os.Getenv("AIOPS_CLUSTER_LABEL"),
+		ClusterLabels: clusterLabelsFromEnv(),
 	}
 }
 
@@ -64,11 +67,11 @@ func FromEnv() (Querier, string) {
 // Client 查询共享观测后端。控制面的 Tool Gateway 直接使用它,
 // 不再绕经任何集群内 agent。
 type Client struct {
-	prom         *promClient
-	loki         *lokiClient
-	tempo        *tempoClient
-	clusterLabel string
-	now          func() time.Time
+	prom          *promClient
+	loki          *lokiClient
+	tempo         *tempoClient
+	clusterLabels ClusterLabels
+	now           func() time.Time
 }
 
 // New 构造 Client。缺失的后端只会禁用对应工具,不会硬失败。
@@ -78,7 +81,7 @@ func New(cfg Config) *Client {
 		timeout = 15 * time.Second
 	}
 	hc := &http.Client{Timeout: timeout}
-	c := &Client{now: time.Now, clusterLabel: strings.TrimSpace(cfg.ClusterLabel)}
+	c := &Client{now: time.Now, clusterLabels: cfg.ClusterLabels.Resolve(cfg.ClusterLabel)}
 	if u := strings.TrimSpace(cfg.PrometheusURL); u != "" {
 		c.prom = &promClient{base: strings.TrimRight(u, "/"), hc: hc}
 	}
@@ -111,12 +114,16 @@ func (c *Client) Backends() []string {
 	return out
 }
 
-// clusterScope 返回集群维度约束(未配置 clusterLabel 时返回零值=不强制)。
-func (c *Client) clusterScope(scope Scope) ScopeLabel {
-	if c.clusterLabel == "" {
+// clusterScope 返回指定后端的集群维度约束(未配置时返回零值=不强制)。
+//
+// 按后端取名而非共用一个值:点号在 PromQL/LogQL 里是语法错误,而 Tempo 的
+// OTel 语义约定恰恰用点号,单一值无法同时满足(见 clusterlabel.go)。
+func (c *Client) clusterScope(backend string, scope Scope) ScopeLabel {
+	name := c.clusterLabels.For(backend)
+	if name == "" {
 		return ScopeLabel{}
 	}
-	return ScopeLabel{Name: c.clusterLabel, Value: scope.ClusterID}
+	return ScopeLabel{Name: name, Value: scope.ClusterID}
 }
 
 // QueryMetrics 执行 query_metrics 工具。
@@ -126,7 +133,7 @@ func (c *Client) QueryMetrics(ctx context.Context, scope Scope, args map[string]
 			"未配置 AIOPS_PROM_URL,指标查询降级"), nil
 	}
 	from, to := window(scope, c.now)
-	return c.prom.queryRange(ctx, scope, args, from, to, c.clusterScope(scope))
+	return c.prom.queryRange(ctx, scope, args, from, to, c.clusterScope(BackendPrometheus, scope))
 }
 
 // SearchLogs 执行 search_logs 工具。
@@ -136,7 +143,7 @@ func (c *Client) SearchLogs(ctx context.Context, scope Scope, args map[string]an
 			"未配置 AIOPS_LOKI_URL,日志查询降级"), nil
 	}
 	from, to := window(scope, c.now)
-	return c.loki.queryRange(ctx, scope, args, from, to, c.clusterScope(scope))
+	return c.loki.queryRange(ctx, scope, args, from, to, c.clusterScope(BackendLoki, scope))
 }
 
 // GetTraces 执行 get_traces 工具。
@@ -146,5 +153,5 @@ func (c *Client) GetTraces(ctx context.Context, scope Scope, args map[string]any
 			"未配置 AIOPS_TEMPO_URL,链路查询降级"), nil
 	}
 	from, to := window(scope, c.now)
-	return c.tempo.search(ctx, scope, args, from, to, c.clusterScope(scope))
+	return c.tempo.search(ctx, scope, args, from, to, c.clusterScope(BackendTempo, scope))
 }

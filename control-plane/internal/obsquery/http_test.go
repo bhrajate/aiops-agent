@@ -166,6 +166,12 @@ func TestConfigFromEnv(t *testing.T) {
 		cfg.TempoURL != "http://tempo:3200" || cfg.ClusterLabel != "cluster_id" {
 		t.Errorf("ConfigFromEnv mismatch: %+v", cfg)
 	}
+	// 全局 AIOPS_CLUSTER_LABEL 应回落到三个后端(向后兼容:老部署只设了这一个变量)。
+	if cfg.ClusterLabels.Prometheus != "cluster_id" ||
+		cfg.ClusterLabels.Loki != "cluster_id" ||
+		cfg.ClusterLabels.Tempo != "cluster_id" {
+		t.Errorf("全局 label 未回落到各后端: %+v", cfg.ClusterLabels)
+	}
 	c := New(cfg)
 	if !c.Configured() {
 		t.Error("三个后端都配置了,Configured 应为 true")
@@ -182,5 +188,58 @@ func TestNotConfigured(t *testing.T) {
 	}
 	if len(c.Backends()) != 0 {
 		t.Errorf("空配置不应有后端: %v", c.Backends())
+	}
+}
+
+// TestConfigFromEnv_PerBackendOverride 验证后端专属变量优先于全局值,
+// 且这个组合(Prom=cluster + Tempo=k8s.cluster.name)在改动前**无法同时生效**。
+func TestConfigFromEnv_PerBackendOverride(t *testing.T) {
+	t.Setenv("AIOPS_CLUSTER_LABEL", "cluster")
+	t.Setenv("AIOPS_TEMPO_CLUSTER_LABEL", "k8s.cluster.name")
+	t.Setenv("AIOPS_LOKI_CLUSTER_LABEL", "k8s_cluster_name")
+	cfg := ConfigFromEnv()
+	if cfg.ClusterLabels.Prometheus != "cluster" {
+		t.Errorf("Prometheus 应回落到全局值: %q", cfg.ClusterLabels.Prometheus)
+	}
+	if cfg.ClusterLabels.Loki != "k8s_cluster_name" {
+		t.Errorf("Loki 应用专属值: %q", cfg.ClusterLabels.Loki)
+	}
+	if cfg.ClusterLabels.Tempo != "k8s.cluster.name" {
+		t.Errorf("Tempo 应用专属值: %q", cfg.ClusterLabels.Tempo)
+	}
+	if err := cfg.ClusterLabels.Validate(); err != nil {
+		t.Errorf("该组合应合法: %v", err)
+	}
+}
+
+// TestConfigFromEnv_Disabled 验证显式关闭。
+// 要求显式表态而非留空即关闭:留空静默不隔离会让 RCA 读到其他集群同名
+// namespace 的数据,而该错误在诊断结论里看不出来。
+func TestConfigFromEnv_Disabled(t *testing.T) {
+	t.Setenv("AIOPS_CLUSTER_LABEL", "cluster")
+	t.Setenv("AIOPS_CLUSTER_LABEL_DISABLED", "true")
+	cfg := ConfigFromEnv()
+	if len(cfg.ClusterLabels.Unenforced()) != 3 {
+		t.Errorf("显式关闭后三个后端都应不强制: %+v", cfg.ClusterLabels)
+	}
+}
+
+// TestConfigFromEnv_Defaults 验证未设任何变量时用各后端的惯例默认值——
+// 这些默认值不同,正是本改动的理由。
+func TestConfigFromEnv_Defaults(t *testing.T) {
+	t.Setenv("AIOPS_CLUSTER_LABEL", "")
+	t.Setenv("AIOPS_PROM_CLUSTER_LABEL", "")
+	t.Setenv("AIOPS_LOKI_CLUSTER_LABEL", "")
+	t.Setenv("AIOPS_TEMPO_CLUSTER_LABEL", "")
+	t.Setenv("AIOPS_CLUSTER_LABEL_DISABLED", "")
+	cl := ConfigFromEnv().ClusterLabels
+	if cl.Prometheus != DefaultPromClusterLabel || cl.Loki != DefaultLokiClusterLabel {
+		t.Errorf("Prom/Loki 默认应为 cluster: %+v", cl)
+	}
+	if cl.Tempo != DefaultTempoClusterLabel {
+		t.Errorf("Tempo 默认应为 OTel 语义约定 k8s.cluster.name: %q", cl.Tempo)
+	}
+	if err := cl.Validate(); err != nil {
+		t.Errorf("默认值必须自洽合法: %v", err)
 	}
 }

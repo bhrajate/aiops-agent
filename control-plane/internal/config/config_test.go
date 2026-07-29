@@ -133,12 +133,40 @@ func TestValidate_ProdRequiresObservabilityBackend(t *testing.T) {
 	}
 }
 
-func TestValidate_ProdRequiresClusterLabel(t *testing.T) {
-	c := base(true)
-	c.ClusterLabel = ""
-	if err := c.Validate(); err == nil {
-		t.Fatal("生产模式必须要求 AIOPS_CLUSTER_LABEL")
-	}
+func TestValidate_ProdRequiresClusterIsolation(t *testing.T) {
+	// 三个后端命名法不同,所以"配了集群维度隔离"有三条合法路径:全局变量、
+	// 任一后端专属变量、或显式声明后端为单集群专用。三条都没有才算配置缺失。
+	t.Run("三者皆无应失败", func(t *testing.T) {
+		c := base(true)
+		c.ClusterLabel = ""
+		if err := c.Validate(); err == nil {
+			t.Fatal("生产模式未配置任何集群维度隔离应失败")
+		}
+	})
+	t.Run("全局变量可满足", func(t *testing.T) {
+		c := base(true)
+		if err := c.Validate(); err != nil {
+			t.Fatalf("配了全局 AIOPS_CLUSTER_LABEL 应通过: %v", err)
+		}
+	})
+	t.Run("仅后端专属变量也可满足", func(t *testing.T) {
+		// Tempo 用 OTel 的 k8s.cluster.name,与 Prom/Loki 不同名——这正是
+		// 必须允许"只配后端专属变量"的原因。
+		c := base(true)
+		c.ClusterLabel = ""
+		c.TempoClusterLabel = "k8s.cluster.name"
+		if err := c.Validate(); err != nil {
+			t.Fatalf("配了后端专属变量应通过: %v", err)
+		}
+	})
+	t.Run("显式声明单集群专用可满足", func(t *testing.T) {
+		c := base(true)
+		c.ClusterLabel = ""
+		c.ClusterLabelDisabled = true
+		if err := c.Validate(); err != nil {
+			t.Fatalf("显式 DISABLED 应通过: %v", err)
+		}
+	})
 }
 
 func TestValidate_DevAllowsMockObservability(t *testing.T) {

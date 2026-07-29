@@ -15,6 +15,18 @@ config:
   temporalHostPort: "temporal-frontend.temporal.svc.cluster.local:7233"
   s3Endpoint: "https://s3.cn-north-1.amazonaws.com.cn"
   s3Bucket: "aiops-evidence-prod"
+  # 共享观测后端:生产必须配,否则启动校验拒绝(未配置会回退 mock 假证据)。
+  prometheusUrl: "http://prometheus.monitoring.svc.cluster.local:9090"
+  lokiUrl: "http://loki-gateway.monitoring.svc.cluster.local:80"
+  tempoUrl: "http://tempo-query-frontend.monitoring.svc.cluster.local:3200"
+  # ⚠ 这三个值**必须**对着你们真实后端核对,示例值大概率不对:
+  #   Prom  : curl -s <prom>/api/v1/labels | grep -o 'cluster[a-z_]*'
+  #   Loki  : curl -s <loki>/loki/api/v1/labels | grep -o 'cluster[a-z_]*'
+  #   Tempo : 查一条 trace 的 resource attributes,看集群字段实际叫什么
+  # 名字写错不报错、只静默查空;点号给了 Prom/Loki 则启动即失败。
+  promClusterLabel: "cluster"
+  lokiClusterLabel: "cluster"
+  tempoClusterLabel: "k8s.cluster.name"
 
 # 生产:不在 values 落明文,改用 External Secrets Operator / Vault 生成的同名 Secret。
 secrets:
