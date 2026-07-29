@@ -108,6 +108,51 @@ spec:
               检查 ingest 角色副本与 signals topic 的消费延迟。
             runbook: "docs/RUNBOOK.md#信号进来但没有-incident"
 
+    - name: aiops.cost
+      rules:
+        # 模型花费速率。用 rate() 而非累计值:累计值只会一直涨,
+        # 定不出阈值;速率能回答"当前烧钱有多快"。
+        - alert: AiopsModelCostRateHigh
+          expr: rate(aiops_model_cost_usd_total[1h]) * 3600 > {{ .Values.monitoring.thresholds.costUSDPerHour }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "模型花费约 {{ `{{ $value | printf \"%.2f\" }}` }} USD/小时"
+            description: >-
+              持续高于预期。先看 aiops_trigger_decisions_total 的 reason 分布确认是否
+              有大量低价值 incident 被触发,再看 aiops_investigation_cost_usd 的 P99
+              是否有单次失控的调查。
+            runbook: "docs/RUNBOOK.md#模型花费过高"
+
+        # 单次调查失控:P99 打到预算上限附近,通常是 RCA 循环收不住。
+        - alert: AiopsInvestigationCostOutlier
+          expr: histogram_quantile(0.99, rate(aiops_investigation_cost_usd_bucket[30m])) > {{ .Values.monitoring.thresholds.costUSDPerInvestigation }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "单次调查费用 P99 达 {{ `{{ $value | printf \"%.2f\" }}` }} USD"
+            description: >-
+              某类故障让 RCA 循环收不住。查 investigations.usage 里 rounds 与
+              tool_calls 最高的几条,通常是证据始终不足导致反复重规划。
+            runbook: "docs/RUNBOOK.md#单次调查费用失控"
+
+        # 模型质量退化信号。确定性守卫把"声称已确认却无实时证据"的结论降级,
+        # 这个数上升意味着 prompt 或模型退化 —— 应在放开自动化范围前先看它。
+        - alert: AiopsUngroundedConclusionsRising
+          expr: rate(aiops_ungrounded_downgrades_total[6h]) * 3600 > {{ .Values.monitoring.thresholds.ungroundedPerHour }}
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "无证据支撑的结论被降级 {{ `{{ $value | printf \"%.1f\" }}` }} 次/小时"
+            description: >-
+              模型声称已确认根因但拿不出实时证据,被 evidence-first 守卫降级。
+              上升通常意味着 prompt 或模型退化,也可能是观测后端查不到数据
+              (先排除集群 label 配错导致的静默查空)。
+            runbook: "docs/RUNBOOK.md#无证据结论增多"
+
     - name: aiops.availability
       rules:
         # 副本 not ready。只有在 /readyz 会返 503 之后才有意义(见 P3):

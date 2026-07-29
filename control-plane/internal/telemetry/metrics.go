@@ -20,6 +20,7 @@ type Metrics struct {
 	RetentionPurged       *prometheus.CounterVec   // 按 target 维度
 	IngressThrottled      *prometheus.CounterVec   // 按 tenant 维度
 	TriggerDecisions      *prometheus.CounterVec   // 按 triggered、reason 维度
+	outcome               *Outcome                 // 成效与成本(F10),见 outcome.go
 	reg                   *prometheus.Registry
 }
 
@@ -54,11 +55,13 @@ func New() *Metrics {
 			Name: "aiops_trigger_decisions_total",
 			Help: "Auto-trigger policy decisions by outcome and reason"},
 			[]string{"triggered", "reason"}),
-		reg: reg,
+		outcome: newOutcome(),
+		reg:     reg,
 	}
 	reg.MustRegister(m.SignalsIngested, m.IncidentsCreated, m.InvestigationsStarted,
 		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials,
 		m.RetentionPurged, m.IngressThrottled, m.TriggerDecisions)
+	reg.MustRegister(m.outcome.collectors()...)
 	// Go runtime + process 指标
 	reg.MustRegister(prometheus.NewGoCollector())
 	return m

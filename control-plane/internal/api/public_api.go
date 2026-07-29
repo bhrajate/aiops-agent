@@ -35,7 +35,20 @@ type PublicAPI struct {
 	devUsers    map[string]auth.DevUser
 	agentScope  auth.AgentServiceScope
 	corsOrigins []string
+	feedbackMet FeedbackMetrics // 可为 nil(降级)
 	log         *slog.Logger
+}
+
+// FeedbackMetrics 记录人工反馈(F10 采纳率)。窄接口。
+type FeedbackMetrics interface {
+	IncHumanFeedback(action string)
+}
+
+// WithFeedbackMetrics 注入反馈指标记录器。分开设置而非加构造参数:
+// NewPublicAPI 已有 8 个参数。
+func (a *PublicAPI) WithFeedbackMetrics(m FeedbackMetrics) *PublicAPI {
+	a.feedbackMet = m
+	return a
 }
 
 func NewPublicAPI(s *store.Store, ingress *Ingress, orch *trigger.Orchestrator, tempo Signaler,

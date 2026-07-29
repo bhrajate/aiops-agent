@@ -164,6 +164,60 @@ SELECT id, topic, key, attempts, error FROM outbox WHERE status='dead' ORDER BY 
 注意:若信号被相关性合并进**已存在**的活跃 incident,`incidents_created` 不会增长,
 这是正常行为而非故障。判断依据是 `incidents` 表的 `version` 是否在涨。
 
+### 模型花费过高
+
+`AiopsModelCostRateHigh`:`rate(aiops_model_cost_usd_total[1h])` 折算后超阈值。
+
+按顺序排查,前两步比"调模型"有效得多:
+
+1. **是不是在给低价值 incident 花钱**:
+   ```promql
+   sum by (reason) (aiops_trigger_decisions_total{triggered="true"})
+   ```
+   若 `default_triage` 占大头,说明大量 P3 走了兜底触发,考虑把 P3 加入
+   `AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES`;若 `signal_burst` 占大头,
+   先确认不是重投递虚增(F5 修过一次,`signal_count` 曾随重投递上涨)。
+2. **是不是单次调查失控**:看 `aiops_investigation_cost_usd` 的 P99,
+   若明显高于中位数,问题在个别调查而非总量,转下一节。
+3. 确认前两条都正常后,才是调 Budget(`max_rounds` / `max_tokens`)或换模型。
+
+注意采纳率:若 `aiops_human_feedback_total{action="confirm"}` 占比很低,
+花的钱本身就没换来价值,收紧触发策略比压预算更直接。
+
+### 单次调查费用失控
+
+`AiopsInvestigationCostOutlier`:单次调查费用 P99 超阈值。
+
+通常是 RCA 循环收不住 —— 证据始终不足,规划器反复重规划。定位:
+
+```sql
+SELECT investigation_id, usage->>'rounds' AS rounds,
+       usage->>'tool_calls' AS tool_calls, usage->>'cost_usd' AS cost
+  FROM investigations
+ WHERE (usage->>'cost_usd')::float > 1
+ ORDER BY (usage->>'cost_usd')::float DESC LIMIT 10;
+```
+
+若这些调查的 `ungrounded_downgrades` 也高,根因往往不在模型而在**取不到数据**:
+先排除集群 label 配错导致的静默查空(见 `docs/INTEGRATION.md`),
+那会让模型反复尝试、始终拿不到证据。
+
+### 无证据结论增多
+
+`AiopsUngroundedConclusionsRising`:`aiops_ungrounded_downgrades_total` 速率超阈值。
+
+含义:模型声称已确认根因,但引用的证据里没有一条是实时采集的,
+被 evidence-first 守卫**确定性降级**为未确认。偶发是正常的(证据确实不足),
+持续偏高有两种原因,处置完全不同:
+
+1. **观测后端查不到数据** —— 更常见。模型反复尝试却拿不到证据,只能凭先验作答。
+   先确认集群 label 名与后端实际一致(名字写错不报错、只静默返回空);
+   再看 `aiops_tool_invocations_total{result=~"denied|error"}`。
+2. **prompt 或模型退化** —— 排除第 1 条后才考虑。跑离线评测
+   (`golden_cases`)对比基线,确认是否同一批用例的引用率下降。
+
+这个指标应在**放开自动化范围之前**先看:它直接度量"结论有没有事实支撑"。
+
 ### 副本持续 not ready
 
 `AiopsReplicaNotReady`:副本 `/readyz` 持续返 503,已被摘出 Service endpoints。

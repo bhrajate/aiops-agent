@@ -187,6 +187,12 @@ func (a *PublicAPI) postFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	a.store.Audit(r.Context(), inv.TenantID, body.Author, "human_feedback", "investigation", id, "ok",
 		nil, map[string]any{"action": body.Action})
+	// F10 采纳率:按 action 分维度,不预先算比率 ——
+	// 采纳率 = confirm / sum(confirm,correct,reject),用 PromQL 现算即可。
+	// 固化成比率会丢掉分子分母,而"低采纳率"与"没人给反馈"是完全不同的问题。
+	if a.feedbackMet != nil {
+		a.feedbackMet.IncHumanFeedback(body.Action)
+	}
 	httpx.JSON(w, http.StatusOK, fb)
 }
 

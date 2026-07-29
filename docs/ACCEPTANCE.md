@@ -57,6 +57,9 @@
 ./scripts/check-probes.sh
 ./scripts/check-queue-metrics.sh
 ./scripts/check-alert-rules.sh
+./scripts/check-signal-idempotency.sh
+./scripts/check-trigger-policy.sh
+./scripts/check-outcome-metrics.sh
 ```
 
 | 脚本 | 验证的不变量 | 当前结果 |
@@ -73,7 +76,10 @@
 | `check-frontend-auth.sh` | 前端登录与越权 | 5/5 |
 | `check-probes.sh` | 探针语义分离:**真的停 postgres**,`/readyz` 返 503(副本被摘出 endpoints)、`/healthz` 仍 200(不重启进程)、恢复后自动放回(P3) | 9/9 |
 | `check-queue-metrics.sh` | 队列积压指标:**真的停 postgres**,四个队列 gauge 全部缺失且 `scrape_failed=1`(缺失而非上报 0)、其余指标仍正常、恢复后回来(P4) | 12/12 |
-| `check-alert-rules.sh` | 告警规则对着**真实 /metrics** 校验:语法 + metric 名存在性(引用不存在的 series 会永不触发)(P5) | 7/7 |
+| `check-alert-rules.sh` | 告警规则对着**真实 /metrics** 校验:语法 + metric 名存在性(引用不存在的 series 会永不触发)(P5) | 10/10 |
+| `check-signal-idempotency.sh` | Alertmanager 重投递去重:重投 5 次只落 1 条且 `signal_count` 不虚增;反向 `firing→resolved→firing` 仍是 3 条(F5) | 6/6 |
+| `check-trigger-policy.sh` | 自动触发策略真的会拦:P4 单信号被跳过且写审计;P1 与"P4 但变更关联"必触发(F7) | 7/7 |
+| `check-outcome-metrics.sh` | 成效与成本指标:token/费用/时延/采纳率九个指标齐备并有值(F10) | 10/10 |
 | `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
 
 ## 核心设计原则落地

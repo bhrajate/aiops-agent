@@ -3,6 +3,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/aiops/control-plane/internal/auth"
 	"github.com/aiops/control-plane/internal/gateway"
@@ -19,11 +20,25 @@ type InternalAPI struct {
 	token        string // 共享密钥(SECURITY §2)
 	requireToken bool   // 生产模式:token 为空也拒绝
 	metricsHTTP  http.Handler
+	outcome      OutcomeMetrics // 可为 nil(降级)
 	log          *slog.Logger
+}
+
+// OutcomeMetrics 记录成效与成本(F10)。窄接口,与本项目其他包一致。
+type OutcomeMetrics interface {
+	ObserveUsage(tokens int, costUSD, elapsedSec float64, toolCalls, ungroundedDowngrades int)
+	ObserveDiagnosis(status string, latencySec float64)
 }
 
 func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, requireToken bool, metricsHTTP http.Handler, log *slog.Logger) *InternalAPI {
 	return &InternalAPI{store: s, gateway: gw, token: token, requireToken: requireToken, metricsHTTP: metricsHTTP, log: log}
+}
+
+// WithOutcomeMetrics 注入成效/成本指标记录器(F10)。
+// 分开设置而非加构造参数:NewInternalAPI 已有 6 个参数,再加会迫使所有调用点改动。
+func (a *InternalAPI) WithOutcomeMetrics(m OutcomeMetrics) *InternalAPI {
+	a.outcome = m
+	return a
 }
 
 func (a *InternalAPI) Routes() http.Handler {
@@ -160,6 +175,15 @@ func (a *InternalAPI) setDiagnosis(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = a.store.AppendEvent(r.Context(), id, "diagnosis_published",
 		map[string]any{"status": body.Diagnosis.Status, "hypotheses": len(body.Diagnosis.Hypotheses)})
+	// F10:诊断时延 = 调查开始 → 首次结论。刻意**不是** MTTR:后者混合了人的
+	// 响应速度(值班多久看到、多久动手),当系统指标会得出错误结论。
+	if a.outcome != nil {
+		var latency float64
+		if inv, err := a.store.GetInvestigation(r.Context(), id); err == nil && !inv.StartedAt.IsZero() {
+			latency = time.Since(inv.StartedAt).Seconds()
+		}
+		a.outcome.ObserveDiagnosis(body.Diagnosis.Status, latency)
+	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -174,6 +198,11 @@ func (a *InternalAPI) setUsage(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.SetInvestigationUsage(r.Context(), id, body.Usage); err != nil {
 		httpx.Error(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
+	}
+	// F10:usage 此前只落库、从不导出,成本与模型质量在 Prometheus 上完全不可见。
+	if a.outcome != nil {
+		u := body.Usage
+		a.outcome.ObserveUsage(u.Tokens, u.CostUSD, u.ElapsedSec, u.ToolCalls, u.UngroundedDowngrades)
 	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

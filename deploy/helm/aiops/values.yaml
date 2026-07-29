@@ -210,3 +210,14 @@ monitoring:
     # 死信存量超过此值告警。取 0 会让单条偶发失败就吵醒值班,
     # 而死信本就是"需要人看但不紧急"的性质。
     deadLetterBacklog: 10
+    # ---- 成本(F10)----
+    # 模型花费速率上限(USD/小时)。**这三个值必须按你们的实际规模与预算调整**,
+    # 这里的数字只是让规则可用的占位:
+    #   costUSDPerHour 按"每小时几十次调查、每次几分钱"的量级估;
+    #   costUSDPerInvestigation 取 Budget 默认 max_cost_usd(2)的一半 ——
+    #     P99 打到预算一半通常已意味着 RCA 循环收不住;
+    #   ungroundedPerHour 取 5:偶发降级是正常的(证据确实不足),
+    #     持续偏高才是模型或 prompt 退化。
+    costUSDPerHour: 5
+    costUSDPerInvestigation: 1
+    ungroundedPerHour: 5
