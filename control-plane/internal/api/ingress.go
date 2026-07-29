@@ -102,10 +102,18 @@ func (i *Ingress) PostSignal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	accepted := 0
+	accepted, duplicate := 0, 0
 	for _, sig := range signals {
-		if err := i.store.InsertSignalWithOutbox(r.Context(), sig); err != nil {
+		inserted, err := i.store.InsertSignalWithOutbox(r.Context(), sig)
+		if err != nil {
 			i.log.Warn("persist signal failed", "signal_id", sig.SignalID, "err", err)
+			continue
+		}
+		if !inserted {
+			// 重复投递(Alertmanager 至少一次投递,这是预期行为而非错误)。
+			// 不计入 signals_ingested:否则计数器会随重投递虚增,
+			// 与它要度量的"进来了多少信号"不符 —— 与 F5 修的是同一类问题。
+			duplicate++
 			continue
 		}
 		if i.metrics != nil {
@@ -114,10 +122,14 @@ func (i *Ingress) PostSignal(w http.ResponseWriter, r *http.Request) {
 		accepted++
 	}
 	i.store.Audit(r.Context(), i.tenant, "ingress", "signal_ingest", "signal", "", "ok",
-		map[string]any{"cluster": i.clusterID}, map[string]any{"accepted": accepted, "total": len(signals)})
+		map[string]any{"cluster": i.clusterID},
+		map[string]any{"accepted": accepted, "duplicate": duplicate, "total": len(signals)})
 
-	// 快速返回,不等待后续 Incident/RCA
-	httpx.JSON(w, http.StatusAccepted, map[string]any{"accepted": accepted, "total": len(signals)})
+	// 快速返回,不等待后续 Incident/RCA。
+	// 重复投递仍返回 202:调用方重投的目的已经达成(信号已在系统里),
+	// 报错会让 Alertmanager 继续重试同一条。duplicate 单独回报便于排查投递配置。
+	httpx.JSON(w, http.StatusAccepted, map[string]any{
+		"accepted": accepted, "duplicate": duplicate, "total": len(signals)})
 }
 
 func (i *Ingress) fromNative(raw map[string]json.RawMessage) []model.Signal {
@@ -126,7 +138,14 @@ func (i *Ingress) fromNative(raw map[string]json.RawMessage) []model.Signal {
 	if err := json.Unmarshal(b, &sig); err != nil {
 		return nil
 	}
-	i.fill(&sig, b)
+	// 原生格式:调用方可显式给 signal_id(那时 fill 不覆盖)。没给则用
+	// signal_type + starts_at 参与身份,让同一资源的 firing/resolved 区分开;
+	// 无 fingerprint 时基础是 payload 哈希(见 signalid.go)。
+	ident := signalIdentity{Status: sig.SignalType}
+	if sig.StartsAt != nil {
+		ident.StartsAt = *sig.StartsAt
+	}
+	i.fill(&sig, b, ident)
 	if sig.SignalType == "" {
 		return nil
 	}
@@ -174,7 +193,13 @@ func (i *Ingress) fromAlertmanager(raw map[string]json.RawMessage) []model.Signa
 			sig.EndsAt = &al.EndsAt
 		}
 		payloadBytes, _ := json.Marshal(al)
-		i.fill(&sig, payloadBytes)
+		// fingerprint 此前被解析出来却直接丢弃 —— 它正是 Alertmanager 提供的
+		// 稳定身份。status/startsAt 一并带上以区分 firing/resolved 与不同故障轮次。
+		i.fill(&sig, payloadBytes, signalIdentity{
+			Fingerprint: al.Fingerprint,
+			Status:      al.Status,
+			StartsAt:    al.StartsAt,
+		})
 		out = append(out, sig)
 	}
 	return out
@@ -215,7 +240,10 @@ func resourceFromAlertLabels(l map[string]string) model.ResourceRef {
 }
 
 // fill 填充缺省字段:signal_id、tenant、cluster、labels、payload_hash、received_at。
-func (i *Ingress) fill(sig *model.Signal, payload []byte) {
+//
+// ident 提供推导 signal_id 的稳定身份(见 signalid.go)。零值 ident 表示
+// 调用方没有更好的身份来源,此时只用 payload 哈希。
+func (i *Ingress) fill(sig *model.Signal, payload []byte, ident signalIdentity) {
 	if sig.TenantID == "" {
 		sig.TenantID = i.tenant
 	}
@@ -229,8 +257,10 @@ func (i *Ingress) fill(sig *model.Signal, payload []byte) {
 	h := sha256.Sum256(payload)
 	sig.PayloadHash = "sha256:" + hex.EncodeToString(h[:])
 	if sig.SignalID == "" {
-		// 幂等:同一 payload 短时间内重复投递生成相同前缀 + 时间片
-		sig.SignalID = "sig-" + hex.EncodeToString(h[:8]) + "-" + randHex(4)
+		// 幂等:**不含随机成分**。旧实现附加 randHex(4),使每次重投递都得到
+		// 新 ID,ON CONFLICT 永不冲突 —— 重复行虚增 signal_count(F5)。
+		ident.PayloadHash = sig.PayloadHash
+		sig.SignalID = deriveSignalID(ident)
 	}
 }
 
