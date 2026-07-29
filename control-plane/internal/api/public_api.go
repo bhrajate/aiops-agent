@@ -49,13 +49,13 @@ func NewPublicAPI(s *store.Store, ingress *Ingress, orch *trigger.Orchestrator, 
 
 func (a *PublicAPI) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		st := "ok"
-		if err := a.store.Health(r.Context()); err != nil {
-			st = "degraded"
-		}
-		httpx.JSON(w, http.StatusOK, map[string]string{"status": st})
-	})
+	// liveness:恒 200,不查依赖。数据库挂了重启进程修不了数据库(见 httpx/health.go)。
+	mux.HandleFunc("GET /healthz", httpx.HealthzHandler())
+	// readiness:DB 不可用返 503,让 kubelet 把本副本摘出 Service endpoints。
+	// 此前两个探针共用 /healthz 且状态码恒 200,断连副本会继续接流量然后每请求 500。
+	mux.HandleFunc("GET /readyz", httpx.ReadyzHandler(httpx.HealthChecker{
+		Name: "database", Check: a.store.Health, Critical: true,
+	}))
 
 	// 认证端点(仅 hs256 开发模式;SECURITY §1)
 	mux.HandleFunc("POST /v1/auth/login", a.login)
@@ -75,7 +75,7 @@ func (a *PublicAPI) Routes() http.Handler {
 	// 认证中间件:跳过 healthz / 登录 / signals(webhook 自有鉴权)
 	skip := func(r *http.Request) bool {
 		p := r.URL.Path
-		return p == "/healthz" || p == "/v1/auth/login" || p == "/v1/signals"
+		return p == "/healthz" || p == "/readyz" || p == "/v1/auth/login" || p == "/v1/signals"
 	}
 	return httpx.CORS(a.corsOrigins, httpx.Logging(a.log, a.authn.Middleware(skip, mux)))
 }

@@ -69,14 +69,18 @@ spec:
                 name: aiops-config
             - secretRef:
                 name: aiops-secrets
+          # readiness 指 /readyz:DB 不可用时返 503,kubelet 把本副本摘出
+          # Service endpoints,流量转到健康副本。依赖恢复后自动放回。
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: public
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          # liveness 指 /healthz:恒 200、不查依赖。数据库挂了重启进程修不了数据库,
+          # 只会让所有副本同时 CrashLoopBackOff 并冲掉最需要的日志。
           livenessProbe:
             httpGet:
               path: /healthz

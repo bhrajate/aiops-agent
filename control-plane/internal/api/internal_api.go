@@ -28,9 +28,11 @@ func NewInternalAPI(s *store.Store, gw *gateway.Gateway, token string, requireTo
 
 func (a *InternalAPI) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	// liveness / readiness 语义同公共 API(见 httpx/health.go)。
+	mux.HandleFunc("GET /healthz", httpx.HealthzHandler())
+	mux.HandleFunc("GET /readyz", httpx.ReadyzHandler(httpx.HealthChecker{
+		Name: "database", Check: a.store.Health, Critical: true,
+	}))
 	// Prometheus 指标(架构第 16 节)。放在 token 校验之外,供采集器抓取。
 	if a.metricsHTTP != nil {
 		mux.Handle("GET /metrics", a.metricsHTTP)

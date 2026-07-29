@@ -40,7 +40,7 @@ func (a *Authenticator) Middleware(skip func(r *http.Request) bool, next http.Ha
 func RequireInternalToken(token string, requireToken bool, next http.Handler) http.Handler {
 	expected := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
