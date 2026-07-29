@@ -22,6 +22,11 @@
 | F8 | 离线评测门槛未接 CI | 中 | ✅ 已修 |
 | F9 | CI 无任何安全扫描 | 中 | ✅ 已修 |
 | F10 | 无业务成效与成本指标(MTTR / 采纳率 / token 费用) | 中 | ⬜ 待做 |
+| P1 | **无任何数据库迁移机制**:DDL 只在数据卷首次创建时执行,生产托管 PG 无此钩子 | 阻塞 | ✅ 已修(第三轮) |
+| P2 | 三个观测后端共用一个集群 label 名,而命名法互不兼容(点号是 PromQL 语法错误) | 高 | ✅ 已修(第三轮) |
+| P3 | `/healthz` 状态码恒 200,readiness 无法摘除 DB 断连的副本 | 高 | ⬜ 待做 |
+| P4 | 队列不可观测:无 outbox 深度 / lag / DLQ 存量,relay 卡住时静默失败 | 高 | ⬜ 待做 |
+| P5 | 无 PrometheusRule / ServiceMonitor:指标存在但无人抓取告警 | 中 | ⬜ 待做 |
 
 ---
 
@@ -243,3 +248,191 @@ Thanos/Mimir 可能是自定义 external_label,Tempo 侧常为 `k8s.cluster.name
 
 **这个名字不对,注入的过滤条件就不生效**——共享后端下等于跨集群串数据。
 告诉我实际名称,我把默认值与部署示例一起校准。
+
+---
+
+# 第三轮:生产前置项(P1 阻塞 + P2 配置类缺陷)
+
+本轮起点是"当前项目是否能直接上生产"的评审。结论:**不能**,存在一个硬阻塞。
+下面记录两项已闭合工作,以及评审识别但本轮未处理的项。
+
+## P1 数据库迁移机制(硬阻塞,已闭合)
+
+### 原问题
+
+`shared/sql/` 下 6 个 DDL 文件,唯一执行路径是 docker-compose 把该目录挂到
+postgres 的 `/docker-entrypoint-initdb.d`。而这个钩子**只在数据卷首次创建时生效**。
+
+于是:
+
+* 生产用托管 PostgreSQL(`DEPLOY.md` 自己写明),没有这个钩子 → **首次部署起不来**;
+* Helm 里没有任何 Job 执行 SQL,`main.go` 启动时也不建表;
+* 即使手工建了表,**没有任何地方记录"这个库跑到哪一版"** → 后续每次升级靠人记,
+  早晚重复跑(报错)或漏跑(线上缺列)。
+
+`RUNBOOK.md` 里原本还专门有一条排查项"改了 `shared/sql` 未生效",
+说明这个坑在开发期就已经反复踩到,只是没被识别为生产阻塞。
+
+### 决策
+
+用 golang-migrate。选它而不是 atlas:控制面本来就是 Go,SQL 可 `go:embed` 进二进制,
+不需要额外镜像或语言栈;atlas 的声明式模式对 pgvector 这类扩展类型要额外写声明,
+而这个项目用不到它的 schema diff 能力。
+
+**最关键的一条决策:迁移与启动分离。**
+
+控制面启动时**只校验版本、落后即拒绝启动**,不自动迁移。理由是多副本滚动更新期间
+新旧副本共存,自迁移会让尚未替换的旧副本面对新 schema。迁移是独立步骤
+(Helm `pre-install,pre-upgrade` hook Job,weight `-10`)。
+`AIOPS_AUTO_MIGRATE` 仅供开发/单副本,生产模式下开启会额外告警。
+
+失败即拒绝启动而不是降级运行:带着不匹配的 schema 跑,会在第一次查询时炸,
+且那时错误信息是"某列不存在",比"schema 版本落后"难定位得多。
+
+错误信息按**落后 / 超前 / dirty** 三种情形分别给出可操作指引。"超前"值得单独说:
+它通常意味着回滚了镜像但 schema 没跟着回滚,而不是配置错误。
+
+不提供 `down-all`:一次性删库不应该只差一条命令。
+
+### 过程中发现的真实缺陷
+
+`000003`(两层告警聚合模型)新建的 `uniq_incidents_active_correlation` 要求活跃
+incident 的 `correlation_key` 唯一。但**旧模型允许同一 namespace 有多条活跃
+incident**——这正是两层模型要消除的碎片化。所以任何有存量数据的库,
+必然存在重复 `correlation_key`,升级必然失败。
+
+这个缺陷**空库迁移测试结构性地发现不了**,只有第一次真实生产升级才会暴露。
+我是刻意构造了一个"已有两条同 namespace 活跃 incident"的库才撞出来的。
+这条经验值得记下:迁移的正确性测试必须包含**带存量数据的升级**,
+而不只是"空库能否建出正确的终态 schema"。
+
+修法是建索引前先归并:每个 `correlation_key` 保留 `last_seen` 最新的一条,
+其余标记 `closed` 并用新增的 `superseded_by` 指向保留者。
+**刻意不删除**——值班人员可能正在看被归并的 incident,直接删会让链接 404;
+保留 + 指针可追溯,也让"我的 incident 为什么突然关闭了"有答案。
+对应的 down 明确声明该归并不可逆,并给出追溯 SQL。
+
+### 顺带修掉的种子幂等性缺陷
+
+`shared/seed/001_knowledge.sql` 写了 `ON CONFLICT DO NOTHING`,但它**永远不触发**
+——`knowledge_id` 默认 `gen_random_uuid()`,每次执行生成新主键,没有任何约束可冲突。
+实测连跑两遍从 3 行变 6 行。这个守卫是装饰性的。
+
+影响不止"表里多几行":重复 runbook 会被 RAG 反复检索、挤占 context 预算,
+并让同一份知识在证据里出现多次,**看起来像"多个独立来源支持同一结论"**。
+
+修法是把幂等性做成 **schema 约束**(`000005` 加 `(tenant_id, kind, title)` 唯一索引)
+而非脚本内去重:任何写入路径都受约束,不必指望每个调用方自己记得去重。
+选这三列而非仅 title:不同 kind 允许同名,多租户下各租户知识库互不干扰。
+
+与 `000003` 同一个坑——已重复跑过种子的库直接建唯一索引必然失败,故索引前先去重。
+这里可以安全**删除**重复行(内容完全相同,是脚本 bug 的产物),
+不像 incident 那样承载独立业务语义。
+
+同时修正一处误判:`golden_cases` 从来没有重复问题,它的 `case_id` 是显式的
+(`gc-release-001` 等),`ON CONFLICT (case_id)` 本来就有效。只有 `knowledge_items` 坏了。
+
+### 验证
+
+对真实 PostgreSQL 逐项验证,而非只跑单测:
+
+| 场景 | 结果 |
+|---|---|
+| 空库 → v5 | 16 张表 |
+| 重复 `migrate up` | 幂等,报 already up to date |
+| 四步 `down` → v0 | 只剩 `schema_migrations` |
+| 5 个并发 `migrate up` | advisory lock 串行化,终态 v5 且不 dirty |
+| dirty 态 `force` 修复 | 成功,可继续 up |
+| **带存量数据升级** | 归并正确:保留者 open,另一条 closed 且 `superseded_by` 指向它 |
+| 带重复种子的库升 v5 | 去重正确(6→3),索引建立成功 |
+| 种子连跑三遍 | 行数稳定(knowledge=3 golden=5) |
+| 强制退回 v3 后启动控制面 | 拒绝启动,退出码 1,给出可操作指引 |
+
+## P2 集群 label 按后端拆分(已闭合)
+
+### 原问题
+
+三个后端共用同一个 `clusterLabel` 字段,而 `client.go` 自己的注释就写了
+"Tempo 侧常为 `k8s.cluster.name`"——写注释时已知命名法不同,却只留了一个配置项。
+
+这不只是"默认值不好"。**点号在 PromQL/LogQL 里是语法错误**,不是"查不到数据"。
+所以两种配法都是坏的,无法调参绕过:
+
+* 配 `cluster` → Tempo 静默返回空结果;
+* 配 `k8s.cluster.name` → Prometheus/Loki **每次查询都语法错**。
+
+### 调研结论
+
+业界**没有统一标准**。成熟做法是按后端可配 + 各自默认值——Grafana 自家 mixin
+就用 `per_cluster_label` 把它暴露为可配项,而不是硬编码。
+
+| 后端 | 惯例 | 注入方式 |
+|---|---|---|
+| Prometheus / Mimir | `cluster` | `external_labels` |
+| Loki(Alloy/Promtail) | `cluster` | relabel |
+| Loki(OTLP 原生) | `k8s_cluster_name` | OTel resource attribute 提升为索引 label;LogQL label 名须符合 Prometheus 命名法,故点号转下划线 |
+| Tempo | `k8s.cluster.name` | OTel 语义约定,原生保留点号 |
+
+### 决策
+
+照业界做法实现:`AIOPS_{PROM,LOKI,TEMPO}_CLUSTER_LABEL`,回落链为
+后端专属 > `AIOPS_CLUSTER_LABEL`(全局,向后兼容)> 各后端内置默认值。
+
+**校验按两类配错的不同表现分流**,这是设计的核心:
+
+* **语法非法**(点号给了 Prom/Loki):启动时即可判定 → fail-fast,
+  指名具体环境变量并给出改法(点号转下划线)。不拖到运行期每次查询才失败。
+* **名字合法但不匹配**(实际 `cluster_id` 却配了 `cluster`):后端不报错、
+  只静默返回空结果。**代码里判定不了** → 只能靠文档要求上线前核对。
+  故 `INTEGRATION.md` 给出三个后端各自的核对命令,并说明为何这类最难排查:
+  RCA 跑完了,证据一条也没采到,日志里没有任何异常。
+
+单集群场景改为要求**显式** `AIOPS_CLUSTER_LABEL_DISABLED=true`,不再"留空即关闭":
+留空静默不隔离会让 RCA 读到其他集群同名 namespace 的数据,
+而这个错误**在诊断结论里看不出来**——证据齐全、逻辑自洽,只是来自错误的集群。
+这类"看起来完全正常的错误"必须要求显式表态。
+
+### 顺带修掉一个自己引入的死代码
+
+原打算逐后端告警 unenforced。但各后端都有非空默认值,经 env 路径唯一能出现
+unenforced 的是显式 `DISABLED`,而该分支又被守卫排除——**写了个永不执行的循环**。
+用一个临时测试确认不可达后,改为在真正可达的 `DISABLED` 路径上给一条醒目告警。
+
+`EnvVarFor` 用显式映射而非字符串拼接:拼接对 `prometheus` 会生成不存在的
+`AIOPS_PROMETHEUS_CLUSTER_LABEL`,让运维去改一个没用的变量。已用测试锁死映射。
+
+### 顺带补上 Helm 路径的另一个真实缺口
+
+chart 里**完全没有**观测后端 URL——`values.yaml` / `values-prod.yaml` /
+`configmap.yaml` 三处都缺。而生产校验要求至少配一个后端,
+所以**用 Helm 装生产会直接启动失败**。裸 k8s 清单有这些键,只有 Helm 路径坏了。
+已补三个 URL 与四个集群 label 键,`values-prod` 附核对命令。
+
+### 澄清一处此前的疑虑
+
+`obsquery/tempo.go` 用纯名字 `k8s.namespace.name=` 是**对的**。
+Tempo legacy `/api/search?tags=` 就是 logfmt 纯名字格式,
+`resource.` 前缀只用于 TraceQL 的 `q` 参数。此处无缺陷。
+
+## 评审识别但本轮未处理
+
+| 项 | 问题 | 修法 |
+|---|---|---|
+| P3 | `/healthz` 在 store 降级时只改响应体、状态码恒 200,而 readiness/liveness 都指向它 → DB 断连的副本不会被摘出 Service endpoints,继续接流量报 500。两个探针共用一个语义本身也不对:DB 挂了应摘流量,重启进程修不了数据库 | 新增 `/readyz`,degraded 返 503,readiness 指它;`/healthz` 保留 200 给 liveness |
+| P4 | 队列不可观测:已导出 10 个指标全是**计数器**,没有 outbox 待投递深度 / 消费者 lag / DLQ 存量。outbox relay 卡住时 `/v1/signals` 照样 202、signals 计数照涨,但 incidents 不再增长,**前端看着一切正常**,`DeadLetters` 也不动(它只在彻底放弃时才 +1)。这是最危险的静默失败 | 用 Collector 在抓取时查库(不用后台轮询);查询失败**不上报**该指标而非上报 0——0 会被误读为"队列是空的",缺失则让告警规则的 `absent()` 生效 |
+| P5 | `deploy/` 下无 PrometheusRule 也无 ServiceMonitor:指标存在但没人抓、没人告警 | 随代码一起发布规则,保持规则集精简,每条对应一个具名故障模式并附 runbook 指引 |
+
+前两轮遗留的 F5 / F7 / F10 仍未处理(修法见上文各节)。其中 **F7 与 F10 建议在
+放开自动触发前处理**:`EvaluateAuto` 四个分支全返回 true,每个 incident 都消耗
+一次 triage 模型调用(含 P4 单信号);而 `usage` 有 token 数据却从未导出到
+Prometheus——既没节流,也没仪表。
+
+## 过程教训
+
+本轮**文件读取工具多次返回损坏内容**(重复行、不存在的键、错乱行号)。
+处理方式:凡受影响的判断,一律改用真正解析文件的命令交叉验证
+(`helm lint`、`go build`、`gofmt`、`yaml.safe_load`),编辑改用脚本而非依赖读回结果。
+
+具体收益:靠 `helm template` + `yaml.safe_load` 才确认 Job 渲染正确(目视读回的
+内容是重复错乱的);靠一个临时测试才确认那段告警循环不可达。
+**读回内容不可信时,用解析器复核,不要目视比对。**
