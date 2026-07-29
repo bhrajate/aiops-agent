@@ -2,6 +2,23 @@
 # 对一个已运行的 control-plane(:8088)做认证/RBAC/ABAC/幂等/webhook 检查。
 set -u
 BASE=http://localhost:8088
+COMPOSE="$(dirname "$0")/../deploy/docker-compose.yml"
+
+# 前置清库。本脚本的断言依赖"库里只有自己造的 incident":此前它取
+# incidents[0] 就当成自己的 payment incident,于是别的脚本(如 check-ratelimit
+# 造 namespace=rl 的 incident)留下的行会被当成断言对象 —— bob/viewer 对 rl
+# 确实无权,于是报出 4 个"RBAC/ABAC 失败",而鉴权其实完全正确。
+# 这是假失败,和之前几个脚本的假通过是同一类问题:断言前不确认前置状态。
+docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -q -c \
+  "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
+   investigation_events, human_feedback, outbox, audit_log, idempotency_keys,
+   dead_letters CASCADE;" >/dev/null 2>&1
+
+# 后端就绪预检:curl 静默失败会让所有断言拿到空值,报出误导性结论。
+curl -sf "$BASE/healthz" >/dev/null 2>&1 || {
+  echo "control-plane(:8088)未就绪 —— 请用 scripts/with-backend.sh 运行本脚本" >&2
+  exit 2
+}
 login(){ curl -s $BASE/v1/auth/login -H 'Content-Type: application/json' -d "{\"username\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }
 code(){ curl -s -o /dev/null -w "%{http_code}" "$@"; }
 jget(){ python3 -c "import sys,json;d=json.load(sys.stdin);print($1)"; }
@@ -14,9 +31,14 @@ SIG=$(python3 -c "import hmac,hashlib;print('sha256='+hmac.new(b'webhook-dev-sec
 curl -s -o /dev/null $BASE/v1/signals -H 'Content-Type: application/json' -H "X-AIOPS-Signature: $SIG" -d "$BODY"
 
 # 等待聚合成 incident(最多 25s)
+# 按 namespace 精确定位自己造的 incident。不用 incidents[0]:那取的是"最新一条",
+# 库里有任何其他 incident 时就会张冠李戴。
 INC=""
 for i in $(seq 1 25); do
-  INC=$(curl -s "$BASE/v1/incidents" -H "Authorization: Bearer $ALICE" | jget 'd["incidents"][0]["incident_id"] if d.get("incidents") else ""' 2>/dev/null)
+  INC=$(curl -s "$BASE/v1/incidents" -H "Authorization: Bearer $ALICE" | jget '
+next((x["incident_id"] for x in d.get("incidents",[])
+      if any(r.get("namespace")=="payment" for r in x.get("affected_resources",[]))), "")
+' 2>/dev/null)
   [ -n "$INC" ] && break; sleep 1
 done
 echo "incident=$INC"
@@ -65,6 +87,6 @@ check "无签名 signal → 401" 401 "$(code -X POST $BASE/v1/signals -H 'Conten
 
 echo "=== 内部 API token ==="
 check "内部 API 无 token → 401" 401 "$(code -X POST http://localhost:8090/internal/investigations/$R1/phase -H 'Content-Type: application/json' -d '{"phase":"planning"}')"
-check "内部 API 带 token → 200" 200 "$(code -X POST http://localhost:8090/internal/investigations/$R1/phase -H 'X-Internal-Token: internal-dev-token' -H 'Content-Type: application/json' -d '{"phase":"planning"}')"
+check "内部 API 带 token → 200" 200 "$(code -X POST http://localhost:8090/internal/investigations/$R1/phase -H "X-Internal-Token: ${AIOPS_INTERNAL_TOKEN:-dev-token}" -H 'Content-Type: application/json' -d '{"phase":"planning"}')"
 
 echo ""; echo "RESULT: pass=$pass fail=$fail"; [ "$fail" = 0 ] && echo "ALL PASSED" || echo "FAILURES"
