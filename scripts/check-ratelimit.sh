@@ -23,6 +23,17 @@ ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 info() { echo "== $1"; }
 
+# 本脚本**自起**一个 control-plane,不要用 scripts/with-backend.sh 包裹它。
+# with-backend.sh 会 export AIOPS_WEBHOOK_SECRET,子进程继承后 /v1/signals 强制
+# HMAC 校验,而本脚本发的是未签名请求 —— 结果是全部 401,断言报出"限流没生效"
+# 这种完全误导的结论。这里显式拒绝,让误用自己暴露。
+if [ -n "${AIOPS_WEBHOOK_SECRET:-}" ]; then
+  echo "  本脚本自起后端,不能在设置了 AIOPS_WEBHOOK_SECRET 的环境下运行" >&2
+  echo "  (它发未签名请求,会全部 401 而被误读为限流失效)" >&2
+  echo "  直接运行:bash scripts/check-ratelimit.sh" >&2
+  exit 2
+fi
+
 info "端口预检(避免打到残留进程)"
 for p in $PUB_PORT $INT_PORT; do
   if command -v fuser >/dev/null 2>&1 && fuser "$p/tcp" >/dev/null 2>&1; then

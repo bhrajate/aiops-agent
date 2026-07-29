@@ -187,12 +187,25 @@ kubectl -n aiops run migrate --rm -it --restart=Never \
 本地开发:`cd deploy && make migrate`(等价于 `control-plane migrate up`),
 `make migrate-version` 查版本,`make seed` 灌开发种子(幂等)。
 
-### 7.3 并发安全
+### 7.3 接管一个"已有表但无版本记录"的库
+
+在迁移机制之前建的库(靠 compose 的 initdb 钩子,或手工灌 SQL)会有完整的表结构
+但**没有 `schema_migrations` 表**,`migrate version` 报 `current=0`。
+
+直接 `migrate up` 即可,不需要先 `force`:所有 DDL 都写成 `IF NOT EXISTS` /
+`ADD COLUMN IF NOT EXISTS`,重放是幂等的。已在一份现网库的副本上验证:
+升级后 `current=5`、incident 的 status 分布与原库一致、`superseded_by` 全为空
+(即 `000003` 的归并未误关任何 incident——唯一索引已存在,说明本就无重复)。
+
+若库的表结构与迁移文件**不一致**(手工改过 schema),`migrate up` 可能失败或
+留下 dirty 态。此时按 §7.5 处理:人工对齐到某个干净版本后 `force` 标记。
+
+### 7.4 并发安全
 
 golang-migrate 用 PostgreSQL advisory lock 串行化:多副本/多 Job 同时执行会排队,
 不会重复应用同一迁移。已验证 5 个并发 `migrate up` 终态正确且不 dirty。
 
-### 7.4 迁移失败与 dirty 态
+### 7.5 迁移失败与 dirty 态
 
 迁移中途失败会让版本表停在 `dirty=true`,此时控制面**拒绝启动**(这是正确行为:
 带着半截 schema 跑会在第一次查询时炸,且更难定位)。恢复步骤:
@@ -203,7 +216,7 @@ golang-migrate 用 PostgreSQL advisory lock 串行化:多副本/多 Job 同时�
    (它**不执行任何 SQL**,只改版本表);
 4. 重新 `migrate up`。
 
-### 7.5 回滚镜像时的 schema 兼容性
+### 7.6 回滚镜像时的 schema 兼容性
 
 `Expected` 版本编译在二进制里。回滚到旧镜像时,若新迁移不向后兼容,旧镜像会因
 "schema 版本超前"拒绝启动。此时需先 `migrate down` 回到旧版本对应的版本号 ——
