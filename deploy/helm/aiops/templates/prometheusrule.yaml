@@ -1,0 +1,141 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+{{- /*
+告警规则(P5)。随 chart 一起发布,使规则与产出指标的代码同版本。
+
+刻意保持精简:每条对应一个**具名故障模式**,而不是给每个指标配一个阈值。
+后者只会产出没人看的告警,最后被整体静音——那比没有告警更糟,因为它还占着
+"我们有监控"的名分。
+
+指标名取自真实 /metrics 输出,不是照抄 Go 常量名。引用不存在的 series 时
+Prometheus **不报错、规则永不触发**,看起来有覆盖实则没有——这比语法错误更难发现。
+已核对当前实际导出的 series:
+  始终存在(可用于 absent):aiops_outbox_oldest_pending_age_seconds /
+                            aiops_outbox_dead / aiops_queue_scrape_failed
+  仅在有行时存在:          aiops_outbox_pending{topic} / aiops_dead_letters_pending{topic}
+后者为空队列时**正常缺失**,故不能对它用 absent()。
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "aiops.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: aiops
+    {{- include "aiops.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: aiops.queues
+      rules:
+        # 主告警:outbox 投递卡住。
+        #
+        # 按**年龄**而非条数:告警风暴下积压几千条但几秒排空是正常的;
+        # 只积压 3 条却卡了 20 分钟才是故障。按条数会在风暴时误报、
+        # 在真卡住时漏报——正是这条告警最该抓住的那种故障。
+        - alert: AiopsOutboxDeliveryStuck
+          expr: aiops_outbox_oldest_pending_age_seconds > {{ .Values.monitoring.thresholds.outboxStuckSeconds }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "outbox 最老待投递记录已积压 {{ `{{ $value | humanizeDuration }}` }}"
+            description: >-
+              领域事件停止发布。表现为 /v1/signals 仍返回 202、signals 计数仍在涨,
+              但 incidents 不再增长——前端看起来一切正常。
+            runbook: "docs/RUNBOOK.md#outbox-投递卡住"
+
+        # "监控本身坏了"——独立于"队列健康"的状态。
+        #
+        # Collector 在查询失败时刻意不产出队列 gauge(不上报 0,因为 0 会被读成
+        # "队列是空的"),这条规则正是为了让那个设计有意义。
+        # 用 oldest_pending_age_seconds 而非 outbox_pending:后者在空队列时
+        # 本就缺失,对它 absent() 会在正常运行时一直告警。
+        - alert: AiopsQueueMetricsMissing
+          expr: aiops_queue_scrape_failed == 1 or absent(aiops_outbox_oldest_pending_age_seconds)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "队列深度指标不可用(不等于队列健康)"
+            description: >-
+              控制面无法查询队列积压。此时 AiopsOutboxDeliveryStuck 不会触发,
+              因为它依赖的 series 缺失——即处于"看不见队列状态"而非"队列没问题"。
+            runbook: "docs/RUNBOOK.md#队列指标缺失"
+
+        # 死信堆积:关注**存量**而非增量。计数器进程重启即归零,
+        # 回答不了"现在还有多少条待人工处理"。
+        - alert: AiopsDeadLettersAccumulating
+          expr: sum(aiops_dead_letters_pending) > {{ .Values.monitoring.thresholds.deadLetterBacklog }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "死信存量 {{ `{{ $value }}` }} 条待人工处理"
+            description: >-
+              消息重试耗尽后落入死信。需先归类错误:载荷格式问题要改代码,
+              下游临时不可用可重放。
+            runbook: "docs/RUNBOOK.md#死信堆积"
+
+        # 投递彻底放弃:比死信更严重,这些领域事件永远不会发布。
+        - alert: AiopsOutboxRecordsAbandoned
+          expr: aiops_outbox_dead > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ `{{ $value }}` }} 条 outbox 记录已放弃投递"
+            description: >-
+              对应的 incident 已在库里但事件从未发布,下游状态与事实源不一致。
+              **切勿直接删除这些行**——那是永久丢事件。
+            runbook: "docs/RUNBOOK.md#outbox-投递已放弃"
+
+        # 断链兜底:信号进来了但没有 incident 产出。
+        # 覆盖 outbox 之外的断点(ingest 消费者挂了、Kafka 分区不可用),
+        # 这些情形下 outbox 是空的,上面几条都不会触发。
+        - alert: AiopsSignalsWithoutIncidents
+          expr: |
+            increase(aiops_signals_ingested_total[15m]) > 0
+            and increase(aiops_incidents_created_total[15m]) == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "15 分钟内有信号流入但无 incident 产出"
+            description: >-
+              信号到 incident 的链路断了,且断点不在 outbox(否则 outbox 会积压)。
+              检查 ingest 角色副本与 signals topic 的消费延迟。
+            runbook: "docs/RUNBOOK.md#信号进来但没有-incident"
+
+    - name: aiops.availability
+      rules:
+        # 副本 not ready。只有在 /readyz 会返 503 之后才有意义(见 P3):
+        # 此前探针恒 200,这条规则永远不会触发。
+        - alert: AiopsReplicaNotReady
+          expr: |
+            kube_pod_container_status_ready{namespace="{{ .Release.Namespace }}",container="control-plane"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "control-plane 副本持续 not ready"
+            description: >-
+              /readyz 返回 503,该副本已被摘出 Service endpoints。
+              先看 /readyz 响应体确认是哪个依赖挂了;若是 database,
+              重启副本无用(只会丢进程内状态并冲掉日志)。
+            runbook: "docs/RUNBOOK.md#副本持续-not-ready"
+
+        # 信号入口被限流:告警风暴或配额过低。
+        - alert: AiopsIngressThrottling
+          expr: increase(aiops_ingress_throttled_total[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "信号入口正在限流,可能丢告警"
+            description: >-
+              被拒的信号不会进入系统。确认是真实风暴(限流是预期行为)还是
+              配额过低。注意进程内限流为每副本独立配额,总容量随副本数放大。
+            runbook: "docs/RUNBOOK.md#信号入口限流"
+{{- end }}

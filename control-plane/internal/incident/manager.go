@@ -15,17 +15,23 @@ import (
 	"github.com/aiops/control-plane/internal/store"
 )
 
+// IncidentMetrics 记录 incident 创建。用窄接口而非具体类型,与本项目其他包一致。
+type IncidentMetrics interface {
+	IncIncident(severity, category string)
+}
+
 type Manager struct {
 	store                *store.Store
 	correlationWindowSec int
+	metrics              IncidentMetrics // 可为 nil(降级)
 	log                  *slog.Logger
 }
 
-func New(s *store.Store, correlationWindowSec int, log *slog.Logger) *Manager {
+func New(s *store.Store, correlationWindowSec int, metrics IncidentMetrics, log *slog.Logger) *Manager {
 	if correlationWindowSec <= 0 {
 		correlationWindowSec = 900 // 默认 15 分钟相关窗口
 	}
-	return &Manager{store: s, correlationWindowSec: correlationWindowSec, log: log}
+	return &Manager{store: s, correlationWindowSec: correlationWindowSec, metrics: metrics, log: log}
 }
 
 // HandleSignal 处理一条 signals 消息(bus.Handler 签名)。幂等。
@@ -61,6 +67,14 @@ func (m *Manager) HandleSignal(ctx context.Context, _ []byte, value []byte) erro
 	}, ts, ts, m.correlationWindowSec)
 	if err != nil {
 		return fmt.Errorf("upsert alert group / correlate incident: %w", err)
+	}
+	// 只在新建 incident 时计数。此前 IncIncident 定义了却从未被调用,
+	// 于是 aiops_incidents_created_total **这个 series 根本不存在** ——
+	// 任何引用它的告警规则都会永不触发(Prometheus 不报错,看起来有覆盖实则没有)。
+	// 计 created 而非每条信号:后者数的是信号量,与 signals_ingested 重复,
+	// 且会让"有信号但无 incident 产出"这条断链告警失去意义。
+	if created && m.metrics != nil {
+		m.metrics.IncIncident(agg.Severity, agg.FaultCategory)
 	}
 	if err := m.store.AttachSignalToIncident(ctx, sig.SignalID, agg.IncidentID); err != nil {
 		m.log.Warn("attach signal failed", "err", err)

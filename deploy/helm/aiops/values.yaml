@@ -187,3 +187,26 @@ networkPolicy:
 # ---- 通用调度约束 ----
 podAntiAffinity: true          # 副本跨节点(preferred)
 topologySpread: true
+
+# ---- 指标采集与告警(P5)----
+# 此前 deploy/ 下既无 PrometheusRule 也无 ServiceMonitor:指标存在但没人抓、
+# 没人告警。二者都需要集群里装了 Prometheus Operator(CRD 存在)才能应用。
+monitoring:
+  serviceMonitor:
+    enabled: false
+    # Prometheus Operator 靠这个 label 发现 ServiceMonitor,取值随你们的
+    # Prometheus 实例配置(常见 release: kube-prometheus-stack)。
+    labels: {}
+    # 30s 而非 15s:队列深度指标在抓取时查库,抓太频繁会给业务库添负载。
+    interval: 30s
+  prometheusRule:
+    enabled: false
+    labels: {}
+  thresholds:
+    # outbox 最老待投递年龄超过此值(秒)判为投递卡住。
+    # 600s 的取法:正常投递是亚秒级,10 分钟意味着确实不动了;
+    # 同时留足风暴排空的余量,避免误报。
+    outboxStuckSeconds: 600
+    # 死信存量超过此值告警。取 0 会让单条偶发失败就吵醒值班,
+    # 而死信本就是"需要人看但不紧急"的性质。
+    deadLetterBacklog: 10

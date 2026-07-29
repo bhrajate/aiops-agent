@@ -216,7 +216,7 @@ func main() {
 
 	// ---- 组件装配 ----
 	gw := gateway.New(st, agents, obsClient, rawStore, metrics, log)
-	mgr := incident.New(st, cfg.CorrelationWindowSec, log)
+	mgr := incident.New(st, cfg.CorrelationWindowSec, metrics, log)
 	orch := trigger.NewOrchestrator(st, wf, cfg.InternalURL, cfg.Tenant,
 		trigger.Limits{CooldownSec: cfg.CooldownSec, MaxActive: cfg.MaxActivePerTenant}, log)
 	// 信号入口限流(F6):告警风暴是预期故障模式,ingress 之前只有 2MB body 上限。

@@ -1,0 +1,34 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+{{- /*
+指标采集(P5)。此前 deploy/ 下既无 PrometheusRule 也无 ServiceMonitor
+——指标存在但没人抓、没人告警,等于埋在进程里。
+
+抓 internal 端口:/metrics 挂在内部 API 上(公共 API 不暴露它)。
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "aiops.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: aiops
+    {{- include "aiops.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: control-plane
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: internal
+      path: /metrics
+      # 30s 而非默认 15s:队列深度指标在**抓取时查库**(聚合查询),
+      # 抓太频繁会给业务库添无谓负载。队列积压的告警阈值是分钟级,
+      # 30s 精度足够。
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: 10s
+{{- end }}
