@@ -90,3 +90,17 @@
 
 生产验收的逐项落地状态见 [ACCEPTANCE.md](ACCEPTANCE.md);
 本轮各项改动的**背景与权衡理由**见 [OPTIMIZATION-LOG.md](OPTIMIZATION-LOG.md)。
+
+## 第六轮新增能力(拓扑关联 / 反馈闭环 / 主动异常检测)
+
+| 能力 | 实现 | 关键取舍 |
+|---|---|---|
+| **服务依赖拓扑** | `internal/topology`:周期性从 Tempo service graph 指标(`traces_service_graph_request_total{client,server}`)同步调用边到 `service_topology`;相关性合并后回填 `incidents.topology_refs` 并链接拓扑相邻的活跃 incident | **不合并 incident,只建"疑似同源"链接**(带方向,上游更可能是根因)。一条误判的边会把两次无关故障焊死,而拆分比合并难得多。两级置信度:0.5 进 `topology_refs`(给 planner 上下文,错了代价小),0.8 才链接 incident(出现在值班界面,错了误导排查方向) |
+| **反馈闭环学习** | confirm/correct 反馈自动提升为 `review_status='pending'` 的 golden case;`GET /v1/golden-cases` 待审队列 + `POST /v1/golden-cases/{id}/review` 审核(仅 sre/admin);读取端早已按 `approved` 过滤 | **一律 pending,绝不直接 approved**,并把该列默认值也从 `approved` 改为 `pending`。评测集决定发布质量门槛,错误标注会让门槛失真且极难发现(门槛照常通过或失败,只是标准错了)。审核不可翻转 |
+| **主动异常检测** | `internal/slo`:多窗口 SLO 燃尽率(SRE workbook 表 5-8:14.4×/1h+5m、6×/6h+30m、1×/3d+6h),越限即**合成 signal 走既有入口** | **选燃尽率而非统计异常检测**:后者不可解释(说不出"所以呢")、误报率高(误报会训练值班人员忽略告警)、与用户影响脱钩。合成 signal 而非直接建 incident,以复用两层聚合/触发策略/幂等/审计 |
+
+三者共同的设计约束:**失败只降级、不影响既有路径**。拓扑增强放在入库事务之外
+(失败只丢一次关联);golden case 提升失败不影响反馈提交;SLO 查询失败或无数据
+一律不判越限(无数据 ≠ 越限,当越限处理会产出假故障)。
+
+新增角色 `topology`(拓扑同步)与 `slo`(燃尽率监视),可独立伸缩或关闭。

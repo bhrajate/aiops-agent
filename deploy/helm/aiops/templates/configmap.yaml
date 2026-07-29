@@ -44,6 +44,19 @@ data:
   AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES: {{ .Values.config.autoTrigger.skipSeverities | quote }}
   AIOPS_AUTO_TRIGGER_BURST_SIGNALS: {{ .Values.config.autoTrigger.burstSignals | quote }}
   AIOPS_AUTO_TRIGGER_ON_CHANGE: {{ .Values.config.autoTrigger.onChange | quote }}
+  # 服务依赖拓扑(需 Tempo 启用 metrics-generator 的 service-graphs)
+  AIOPS_TOPOLOGY_ENABLED: {{ .Values.config.topology.enabled | quote }}
+  AIOPS_TOPOLOGY_SYNC_SEC: {{ .Values.config.topology.syncSec | quote }}
+  AIOPS_TOPOLOGY_MAX_EDGE_AGE_SEC: {{ .Values.config.topology.maxEdgeAgeSec | quote }}
+  AIOPS_TOPOLOGY_MIN_CONFIDENCE: {{ .Values.config.topology.minConfidence | quote }}
+  AIOPS_TOPOLOGY_MIN_LINK_CONFIDENCE: {{ .Values.config.topology.minLinkConfidence | quote }}
+  AIOPS_RETENTION_TOPOLOGY_DAYS: {{ .Values.config.topology.retentionDays | quote }}
+  # SLO 燃尽率监视(主动异常检测)。SLI 定义由 ConfigMap 挂载成文件。
+  AIOPS_SLO_ENABLED: {{ .Values.config.slo.enabled | quote }}
+  AIOPS_SLO_INTERVAL_SEC: {{ .Values.config.slo.intervalSec | quote }}
+  {{- if .Values.config.slo.definitions }}
+  AIOPS_SLO_DEFINITIONS_PATH: {{ printf "%s/slis.json" .Values.config.slo.mountPath | quote }}
+  {{- end }}
 {{- if .Values.mtls.enabled }}
   AIOPS_AGENT_TLS_ENABLED: "true"
   AIOPS_AGENT_TLS_CERT: {{ printf "%s/agent.crt" .Values.mtls.mountPath | quote }}

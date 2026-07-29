@@ -60,6 +60,9 @@
 ./scripts/check-signal-idempotency.sh
 ./scripts/check-trigger-policy.sh
 ./scripts/check-outcome-metrics.sh
+./scripts/check-feedback-loop.sh
+# 下面这个会额外起一个 Prometheus 容器与 exporter 容器(退出时自动清理):
+./scripts/check-slo-burnrate.sh
 ```
 
 | 脚本 | 验证的不变量 | 当前结果 |
@@ -80,6 +83,8 @@
 | `check-signal-idempotency.sh` | Alertmanager 重投递去重:重投 5 次只落 1 条且 `signal_count` 不虚增;反向 `firing→resolved→firing` 仍是 3 条(F5) | 6/6 |
 | `check-trigger-policy.sh` | 自动触发策略真的会拦:P4 单信号被跳过且写审计;P1 与"P4 但变更关联"必触发(F7) | 7/7 |
 | `check-outcome-metrics.sh` | 成效与成本指标:token/费用/时延/采纳率九个指标齐备并有值(F10) | 10/10 |
+| `check-feedback-loop.sh` | 反馈闭环:confirm 反馈 → **pending** 用例 → sre 审核 → 入评测集;oncall 不可审核;不可翻转 | 13/13 |
+| `check-slo-burnrate.sh` | 主动异常检测:起**真实 Prometheus** + 可控错误率;未越限不产出、越限产出并聚合为 P1 incident、持续燃烧仍 1 条 | 17/17 |
 | `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
 
 ## 核心设计原则落地

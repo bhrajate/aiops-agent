@@ -121,6 +121,86 @@ AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES=P1,P2  # 无条件触发
 AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES=P4
 AIOPS_AUTO_TRIGGER_BURST_SIGNALS=3          # 信号数达此值视为突发;0 关闭该判据
 AIOPS_AUTO_TRIGGER_ON_CHANGE=true           # 变更关联必触发(最易自动定位的根因)
+
+# ---- 服务依赖拓扑(拓扑关联)----
+#
+# 解决:相关性合并只按 tenant|cluster|namespace,调用链上的故障传播识别不了 ——
+# checkout 挂了导致 payment-api 超时,值班人员看到两个互不相关的 incident,
+# 而根因只有一个,得他们自己在脑子里把这两条连起来。
+#
+# 边的来源是 **Tempo service graph**:metrics-generator 从 trace 的父子 span 推导
+# 真实调用关系,导出 traces_service_graph_request_total{client,server,connection_type}。
+# 这些指标落在 Prometheus 里,控制面直接查 —— 不需要新基础设施,也不需要 cluster-agent。
+#
+# ⚠ **前置条件**:Tempo 必须启用 metrics-generator 的 service-graphs 处理器,
+#   且其指标写入本控制面所连的那个 Prometheus。未启用时同步查到 0 条边并**告警一次**
+#   (不重复刷日志),不影响任何既有路径 —— 但拓扑关联完全不生效,而那在别处
+#   看不出任何异常:incident 照常创建、诊断照常产出,只是少了调用链上下文。
+#   核对:
+#     curl -s '<prom>/api/v1/query?query=count(traces_service_graph_request_total)'
+#
+# 为什么不用 Kubernetes Service selector:它只表达**入口**关系(哪个 Service 选中了
+# 哪个工作负载),回答不了"checkout 调用了谁"。selector 边置信度只有 0.7,
+# 够进 topology_refs 但不够链接 incident。
+AIOPS_TOPOLOGY_ENABLED=true
+AIOPS_TOPOLOGY_SYNC_SEC=300
+AIOPS_TOPOLOGY_MAX_EDGE_AGE_SEC=3600     # 超此龄视为已下线,不参与关联
+# 两级置信度是核心取舍:
+#   MIN_CONFIDENCE      进 topology_refs —— 只是给 planner 更多上下文,错了代价小;
+#   MIN_LINK_CONFIDENCE 链接 incident   —— 会出现在值班人员界面上,错了会误导排查方向。
+# Tempo 真实调用边 0.9(够链接),K8s selector 边 0.7(只够进 refs)。
+AIOPS_TOPOLOGY_MIN_CONFIDENCE=0.5
+AIOPS_TOPOLOGY_MIN_LINK_CONFIDENCE=0.8
+AIOPS_RETENTION_TOPOLOGY_DAYS=7          # 陈旧边清理;太短会在 Tempo 短暂不可用时误删
+#
+# 注:拓扑**不合并** incident,而是建立"疑似同源"链接(带方向,上游更可能是根因)。
+# 合并的风险不对称:一条误判的边会把两次无关故障焊死成一个 incident,
+# 而拆分比合并难得多 —— 已写入的 signal 与证据没法回滚归属。
+# 关联结果在 GET /v1/incidents/{id} 的 relations 字段,也随 getContext 下发给 planner。
+
+# ---- SLO 燃尽率监视(主动异常检测)----
+#
+# 解决:系统此前完全**被动**,只在告警流入时才有反应。没有告警规则覆盖的缓慢退化
+# (错误率从 0.05% 爬到 0.4%,不触发任何静态阈值)完全看不见,直到变成用户投诉。
+#
+# 为什么是燃尽率而不是统计异常检测(3σ / 时序分解 / 孤立森林):
+#   * 统计方法**不可解释** —— 能说"偏离基线 4.2σ",说不出"所以呢"。而本系统的产出
+#     是给人看的诊断结论,一个无法解释的触发理由会污染整条推理链;
+#   * 误报率高且难调(季节性、发布窗口、流量波动都会触发),而误报会训练值班人员
+#     忽略告警 —— 比没有检测更糟;
+#   * 与用户影响脱钩:偏离基线 ≠ 用户受损。燃尽率直接度量"错误预算消耗得多快"。
+#
+# 档位取自 SRE workbook 表 5-8(短窗为长窗的 1/12,用于确认"仍在燃烧"):
+#   14.4× / 1h + 5m   → critical → P1(1 小时消耗 2% 月度预算)
+#   6×    / 6h + 30m  → error    → P2(5%)
+#   1×    / 3d + 6h   → warning  → P3(10%)
+# 一次燃烧同时满足多档时**只报最严重的**,避免同一次故障发三条 signal。
+#
+# 越限后合成 signal 走**既有入口**,自动获得两层聚合 / 触发策略 / 幂等去重 / 审计。
+AIOPS_SLO_ENABLED=false                  # 默认关闭:SLI 定义必须由你们给出
+AIOPS_SLO_INTERVAL_SEC=60
+# SLI 定义。二者择一,PATH 优先:
+#   AIOPS_SLO_DEFINITIONS       inline JSON 数组
+#   AIOPS_SLO_DEFINITIONS_PATH  文件路径(推荐:表达式含完整 PromQL,很长且
+#                               容易被 shell 转义弄坏;K8s 下挂 ConfigMap)
+# AIOPS_SLO_DEFINITIONS_PATH=/etc/aiops/slo/slis.json
+#
+# 表达式要求:
+#   * 必须是**比率**(0..1),不是错误数;
+#   * 必须含 $WINDOW 占位符,监视器按档位替换为 1h/5m/6h/30m/72h/6h。
+#     ⚠ 缺占位符时窗口是写死的,多窗口退化成"同一窗口比两次",两个条件恒同真同假
+#       —— 短窗过滤完全失效,而**表现上一切正常**(告警照常触发,只是不再防抖)。
+#       启动时会因此报错拒绝启动。
+#   * 有多处窗口时(分子分母各一处)全部会被替换 —— 只替换一处会让分子分母用不同
+#     窗口,算出的比率毫无意义却仍是个数字,不会报错。
+#
+# 样例(按你们实际指标名改;Istio / Envoy / 自定义 recording rule 写法不同):
+#   [{"name":"checkout-availability","namespace":"payment","service":"checkout",
+#     "objective":0.999,
+#     "error_ratio_expr":"sum(rate(http_requests_total{namespace=\"payment\",service=\"checkout\",code=~\"5..\"}[$WINDOW])) / sum(rate(http_requests_total{namespace=\"payment\",service=\"checkout\"}[$WINDOW]))"}]
+#
+# 任一条定义非法即**整体**拒绝启动:部分生效会让你以为都在监视,
+# 而实际有一个 SLO 静默没在看。
 # 观测后端集群维度 label 名——**按后端分别配置**。
 #
 # 三个后端对"集群"的命名法互不兼容:

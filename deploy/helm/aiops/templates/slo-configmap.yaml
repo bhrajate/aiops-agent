@@ -1,0 +1,21 @@
+{{- if and .Values.config.slo.enabled .Values.config.slo.definitions }}
+{{- /*
+SLI 定义挂载成文件而非塞进环境变量:表达式含完整 PromQL(很长,且带引号与
+花括号),环境变量里既难读又容易被 shell 转义弄坏。挂载成文件是 K8s 常规做法。
+
+内容由 values 里的 config.slo.definitions 渲染成 JSON 数组 ——
+控制面用 slo.ParseSLIs 解析,任一条非法即启动失败(部分生效会让运维以为都在
+监视而实际有一个 SLO 静默没在看)。
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiops.fullname" . }}-slo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: aiops
+    {{- include "aiops.labels" . | nindent 4 }}
+data:
+  slis.json: |
+    {{- toJson .Values.config.slo.definitions | nindent 4 }}
+{{- end }}

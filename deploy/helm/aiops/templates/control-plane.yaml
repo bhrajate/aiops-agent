@@ -84,17 +84,33 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          {{- if .Values.mtls.enabled }}
+          {{- $sloMount := and .Values.config.slo.enabled .Values.config.slo.definitions }}
+          {{- if or .Values.mtls.enabled $sloMount }}
           volumeMounts:
+            {{- if .Values.mtls.enabled }}
             - name: client-tls
               mountPath: {{ .Values.mtls.mountPath }}
               readOnly: true
+            {{- end }}
+            {{- if $sloMount }}
+            # SLI 定义挂载成文件:表达式含完整 PromQL,放环境变量易被 shell 转义弄坏
+            - name: slo-definitions
+              mountPath: {{ .Values.config.slo.mountPath }}
+              readOnly: true
+            {{- end }}
           {{- end }}
-      {{- if .Values.mtls.enabled }}
+      {{- if or .Values.mtls.enabled $sloMount }}
       volumes:
+        {{- if .Values.mtls.enabled }}
         - name: client-tls
           secret:
             secretName: {{ .Values.mtls.clientSecret }}
+        {{- end }}
+        {{- if $sloMount }}
+        - name: slo-definitions
+          configMap:
+            name: {{ include "aiops.fullname" . }}-slo
+        {{- end }}
       {{- end }}
 ---
 apiVersion: v1

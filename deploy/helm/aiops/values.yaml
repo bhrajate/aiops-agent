@@ -62,6 +62,45 @@ config:
     skipSeverities: "P4"
     burstSignals: 3                 # 0 关闭该判据
     onChange: true                  # 变更关联必触发
+
+  # ---- 服务依赖拓扑(拓扑关联)----
+  # topology_refs 此前恒为 '[]':相关性合并只按 tenant|cluster|namespace,
+  # 调用链上的故障传播识别不了。边来自 Tempo service graph 指标,
+  # **需 Tempo 启用 metrics-generator 的 service-graphs 处理器**且其指标写入
+  # 本控制面所连的 Prometheus。未启用时同步查到 0 条边并告警一次,不影响既有路径。
+  topology:
+    enabled: true
+    syncSec: 300
+    maxEdgeAgeSec: 3600        # 超此龄视为已下线,不参与关联
+    # 两级置信度:minConfidence 进 topology_refs(给 planner 上下文,错了代价小);
+    # minLinkConfidence 才能链接 incident(出现在值班界面,错了会误导排查方向)。
+    # K8s Service selector 边只有 0.7 —— 够前者不够后者。
+    minConfidence: 0.5
+    minLinkConfidence: 0.8
+    retentionDays: 7           # 陈旧边清理;取太短会在 Tempo 短暂不可用时误删
+
+  # ---- SLO 燃尽率监视(主动异常检测)----
+  # 默认关闭:SLI 定义**必须由部署方给出**(只有你们知道什么算错误请求)。
+  #
+  # definitions 是 SLI 定义数组,会被渲染成 ConfigMap 并挂载成文件 ——
+  # 表达式含完整 PromQL,塞进环境变量既难读又容易被 shell 转义弄坏。
+  # 表达式必须是**比率**(0..1)且含 $WINDOW 占位符(按档位替换为
+  # 1h/5m/6h/30m/72h/6h);缺占位符会让多窗口过滤静默失效,启动时报错。
+  # 档位取自 SRE workbook 表 5-8:14.4×/1h+5m、6×/6h+30m、1×/3d+6h。
+  slo:
+    enabled: false
+    intervalSec: 60
+    mountPath: /etc/aiops/slo
+    # 示例(按你们实际指标名改;Istio / Envoy / 自定义 recording rule 写法不同):
+    # definitions:
+    #   - name: checkout-availability
+    #     namespace: payment
+    #     service: checkout
+    #     objective: 0.999
+    #     error_ratio_expr: >-
+    #       sum(rate(http_requests_total{namespace="payment",service="checkout",code=~"5.."}[$WINDOW]))
+    #       / sum(rate(http_requests_total{namespace="payment",service="checkout"}[$WINDOW]))
+    definitions: []
   tenant: "default"
   publicAddr: ":8088"
   internalAddr: ":8090"
