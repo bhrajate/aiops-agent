@@ -141,7 +141,7 @@ func (i *Ingress) fromNative(raw map[string]json.RawMessage) []model.Signal {
 	// 原生格式:调用方可显式给 signal_id(那时 fill 不覆盖)。没给则用
 	// signal_type + starts_at 参与身份,让同一资源的 firing/resolved 区分开;
 	// 无 fingerprint 时基础是 payload 哈希(见 signalid.go)。
-	ident := signalIdentity{Status: sig.SignalType}
+	ident := model.SignalIdentity{Status: sig.SignalType}
 	if sig.StartsAt != nil {
 		ident.StartsAt = *sig.StartsAt
 	}
@@ -195,7 +195,7 @@ func (i *Ingress) fromAlertmanager(raw map[string]json.RawMessage) []model.Signa
 		payloadBytes, _ := json.Marshal(al)
 		// fingerprint 此前被解析出来却直接丢弃 —— 它正是 Alertmanager 提供的
 		// 稳定身份。status/startsAt 一并带上以区分 firing/resolved 与不同故障轮次。
-		i.fill(&sig, payloadBytes, signalIdentity{
+		i.fill(&sig, payloadBytes, model.SignalIdentity{
 			Fingerprint: al.Fingerprint,
 			Status:      al.Status,
 			StartsAt:    al.StartsAt,
@@ -243,7 +243,7 @@ func resourceFromAlertLabels(l map[string]string) model.ResourceRef {
 //
 // ident 提供推导 signal_id 的稳定身份(见 signalid.go)。零值 ident 表示
 // 调用方没有更好的身份来源,此时只用 payload 哈希。
-func (i *Ingress) fill(sig *model.Signal, payload []byte, ident signalIdentity) {
+func (i *Ingress) fill(sig *model.Signal, payload []byte, ident model.SignalIdentity) {
 	if sig.TenantID == "" {
 		sig.TenantID = i.tenant
 	}
@@ -260,7 +260,7 @@ func (i *Ingress) fill(sig *model.Signal, payload []byte, ident signalIdentity) 
 		// 幂等:**不含随机成分**。旧实现附加 randHex(4),使每次重投递都得到
 		// 新 ID,ON CONFLICT 永不冲突 —— 重复行虚增 signal_count(F5)。
 		ident.PayloadHash = sig.PayloadHash
-		sig.SignalID = deriveSignalID(ident)
+		sig.SignalID = model.DeriveSignalID(ident)
 	}
 }
 

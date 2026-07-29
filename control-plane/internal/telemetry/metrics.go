@@ -20,6 +20,7 @@ type Metrics struct {
 	RetentionPurged       *prometheus.CounterVec   // 按 target 维度
 	IngressThrottled      *prometheus.CounterVec   // 按 tenant 维度
 	TriggerDecisions      *prometheus.CounterVec   // 按 triggered、reason 维度
+	SLOEvaluations        *prometheus.CounterVec   // 按 sli、breached 维度
 	TopologyEdges         prometheus.Gauge         // 最近一次同步的边数
 	TopologySyncErrors    prometheus.Counter       // 同步失败次数
 	outcome               *Outcome                 // 成效与成本(F10),见 outcome.go
@@ -57,6 +58,11 @@ func New() *Metrics {
 			Name: "aiops_trigger_decisions_total",
 			Help: "Auto-trigger policy decisions by outcome and reason"},
 			[]string{"triggered", "reason"}),
+		// SLO 评估。按 breached 分维度:只有"评估了多少次"没用,
+		// 要能回答"有多少次真的越限"——那是主动检测产出价值的直接度量。
+		SLOEvaluations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aiops_slo_evaluations_total",
+			Help: "SLO burn-rate evaluations by SLI and outcome"}, []string{"sli", "breached"}),
 		// 拓扑同步可观测性。边数用 Gauge:它是存量而非增量,
 		// 且"突然掉到 0"正是 metrics-generator 挂了的信号。
 		TopologyEdges: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -71,7 +77,7 @@ func New() *Metrics {
 	reg.MustRegister(m.SignalsIngested, m.IncidentsCreated, m.InvestigationsStarted,
 		m.ToolInvokes, m.ToolLatency, m.DeadLetters, m.AuthDenials,
 		m.RetentionPurged, m.IngressThrottled, m.TriggerDecisions,
-		m.TopologyEdges, m.TopologySyncErrors)
+		m.TopologyEdges, m.TopologySyncErrors, m.SLOEvaluations)
 	reg.MustRegister(m.outcome.collectors()...)
 	// Go runtime + process 指标
 	reg.MustRegister(prometheus.NewGoCollector())
@@ -124,6 +130,18 @@ func (m *Metrics) IncIngressThrottled(tenant string) {
 	if m != nil {
 		m.IngressThrottled.WithLabelValues(tenant).Inc()
 	}
+}
+
+// ObserveSLOEvaluation 记录一次 SLO 评估。
+func (m *Metrics) ObserveSLOEvaluation(sli string, breached bool) {
+	if m == nil {
+		return
+	}
+	flag := "false"
+	if breached {
+		flag = "true"
+	}
+	m.SLOEvaluations.WithLabelValues(sli, flag).Inc()
 }
 
 // ObserveTopologySync 记录一次拓扑同步结果。

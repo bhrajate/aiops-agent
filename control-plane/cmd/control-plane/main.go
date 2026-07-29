@@ -32,6 +32,7 @@ import (
 	"github.com/aiops/control-plane/internal/obsquery"
 	"github.com/aiops/control-plane/internal/outbox"
 	"github.com/aiops/control-plane/internal/retention"
+	"github.com/aiops/control-plane/internal/slo"
 	"github.com/aiops/control-plane/internal/store"
 	"github.com/aiops/control-plane/internal/telemetry"
 	"github.com/aiops/control-plane/internal/temporalx"
@@ -363,6 +364,34 @@ func main() {
 		}, metrics, log)
 		wg.Add(1)
 		go func() { defer wg.Done(); jan.Run(ctx) }()
+	}
+
+	// ---- SLO 燃尽率监视(role: slo)----
+	// 主动异常检测:此前系统完全被动,没有告警规则覆盖的缓慢退化看不见。
+	// 检测到燃尽后合成 signal 走既有入口(自动获得两层聚合/触发策略/幂等/审计)。
+	if cfg.SLOEnabled && cfg.HasRole("slo") {
+		slis, serr := slo.LoadSLIs(cfg.SLODefinitions, cfg.SLODefinitionsPath)
+		if serr != nil {
+			// 配置错误 fail-fast:静默跳过会让运维以为 SLO 在监视,而实际没有。
+			log.Error("SLO 定义非法", "err", serr,
+				"example", slo.ExampleSLIsJSON)
+			os.Exit(1)
+		}
+		live, ok := obsQuerier.(*obsquery.Client)
+		switch {
+		case len(slis) == 0:
+			log.Warn("AIOPS_SLO_ENABLED=true 但未提供任何 SLI 定义:" +
+				"SLO 监视不会做任何事。设 AIOPS_SLO_DEFINITIONS 或 _PATH")
+		case !ok || !live.HasPrometheus():
+			log.Warn("SLO 监视未启用:需要真实 Prometheus(mock 数据源会产出假故障)")
+		default:
+			watcher := slo.NewWatcher(live, st, slis, cfg.Tenant, cfg.ClusterID,
+				time.Duration(cfg.SLOIntervalSec)*time.Second, log).WithMetrics(metrics)
+			wg.Add(1)
+			go func() { defer wg.Done(); watcher.Run(ctx) }()
+			log.Info("slo watcher enabled", "slis", len(slis),
+				"interval_sec", cfg.SLOIntervalSec)
+		}
 	}
 
 	// ---- 拓扑同步(role: topology)----

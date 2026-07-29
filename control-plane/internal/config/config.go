@@ -103,6 +103,17 @@ type Config struct {
 	TopologyMinConf     float64 // 进入 topology_refs 的最低置信度
 	TopologyMinLinkConf float64 // 链接 incident 的最低置信度(更严)
 
+	// SLO 燃尽率监视(主动异常检测)。此前系统完全被动 —— 只在告警流入时才有反应,
+	// 没有告警规则覆盖的缓慢退化(错误率从 0.05% 爬到 0.4%)完全看不见。
+	// 检测到燃尽后合成 signal 走既有入口,自动获得两层聚合/触发策略/幂等/审计。
+	SLOEnabled     bool
+	SLOIntervalSec int
+	// SLODefinitions 是 JSON 数组(inline);SLODefinitionsPath 从文件读(优先)。
+	// 支持文件是因为 SLI 表达式含完整 PromQL,很长且容易被 shell 转义弄坏,
+	// 而 ConfigMap 挂载成文件是 K8s 常规做法。
+	SLODefinitions     string
+	SLODefinitionsPath string
+
 	// 自动触发策略(F7)。此前 EvaluateAuto 四个分支全返回 true(伪装成策略的
 	// 常量),每个 incident 都消耗一次 triage 模型调用,含 P4 单信号。
 	// 跳过的 incident 仍入库、仍可人工发起调查,且会写审计与指标。
@@ -288,6 +299,13 @@ func Load() Config {
 		// 0.8:只有真实调用边(Tempo,0.9)足以链接 incident。selector 边只表达
 		// 入口关系,用它链接会把"同一 Service 后的两个无关工作负载"判为同源。
 		TopologyMinLinkConf: getfloat("AIOPS_TOPOLOGY_MIN_LINK_CONFIDENCE", 0.8),
+
+		// 默认关闭:SLI 定义**必须由部署方给出**(只有他们知道什么算错误请求),
+		// 没有定义就没什么可监视的。默认开启会让人以为有覆盖而实际没有。
+		SLOEnabled:         getbool("AIOPS_SLO_ENABLED", false),
+		SLOIntervalSec:     getint("AIOPS_SLO_INTERVAL_SEC", 60),
+		SLODefinitions:     getenv("AIOPS_SLO_DEFINITIONS", ""),
+		SLODefinitionsPath: getenv("AIOPS_SLO_DEFINITIONS_PATH", ""),
 
 		AutoTriggerAll:              getbool("AIOPS_AUTO_TRIGGER_ALL", false),
 		AutoTriggerAlwaysSeverities: splitNonEmpty(strings.ToUpper(getenv("AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES", "P1,P2"))),

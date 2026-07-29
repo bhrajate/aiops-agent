@@ -1,4 +1,4 @@
-package api
+package model
 
 // Signal 身份推导(F5)。
 //
@@ -37,7 +37,7 @@ import (
 )
 
 // signalIdentity 是推导 signal_id 的输入。
-type signalIdentity struct {
+type SignalIdentity struct {
 	// Fingerprint 来自 Alertmanager;为空时用 PayloadHash 兜底。
 	Fingerprint string
 	Status      string
@@ -50,7 +50,7 @@ type signalIdentity struct {
 //
 // 同一告警的同一次通知重复投递会得到同一 ID,由
 // `ON CONFLICT (signal_id) DO NOTHING` 吃掉;不同故障轮次得到不同 ID。
-func deriveSignalID(id signalIdentity) string {
+func DeriveSignalID(id SignalIdentity) string {
 	base := strings.TrimSpace(id.Fingerprint)
 	if base == "" {
 		// 兜底:payload 哈希。去掉 "sha256:" 前缀只为让最终 ID 短一些。
