@@ -1,5 +1,5 @@
 -- =============================================================================
--- 006 — 数据保留(retention)支撑索引
+-- 000004 — 数据保留(retention)支撑索引
 --
 -- 背景:此前所有高写入表都是无界增长(signals / investigation_events /
 -- audit_log / outbox / dead_letters / idempotency_keys / evidence)。按每集群每天
@@ -36,9 +36,8 @@ CREATE INDEX IF NOT EXISTS idx_idempotency_created_at
 CREATE INDEX IF NOT EXISTS idx_dead_letters_created_at
     ON dead_letters (created_at);
 
--- alert_groups:随 incident 清理时按 incident_id 定位。
-CREATE INDEX IF NOT EXISTS idx_alert_groups_incident
-    ON alert_groups (incident_id);
+-- 注:alert_groups(incident_id) 的索引已由 000003 建立,此处不重复声明
+-- (重复声明会让 down 的归属变得含糊:回滚 000004 时不该删掉 000003 建的索引)。
 
 -- incidents:只清理**终态且过期**的 incident,需要 (status, closed/resolved 时间)。
 CREATE INDEX IF NOT EXISTS idx_incidents_terminal_age

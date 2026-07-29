@@ -41,6 +41,14 @@ import (
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
+
+	// 子命令分发。`migrate` 不启动任何服务,执行完即退出——生产由 Helm
+	// pre-install/pre-upgrade Job 调用它,与常驻进程共用镜像以保证 SQL 与代码同版本。
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		runMigrateCmd(log, os.Args[2:])
+		return
+	}
+
 	cfg := config.Load()
 
 	// 启动配置校验(SECURITY §1/§2/§4):生产模式下弱/缺失安全配置直接 fail-fast。
@@ -61,6 +69,16 @@ func main() {
 	}
 	defer st.Close()
 	log.Info("connected to business database")
+
+	// ---- schema 版本校验(fail-fast)----
+	// 刻意**只校验、不自动迁移**:多副本滚动更新时,自动迁移会让尚未替换的旧副本
+	// 面对新 schema。迁移是独立步骤(Helm pre-upgrade Job / CI),此处只确认库已就绪,
+	// 落后就立刻拒绝启动——而不是带着不匹配的 schema 跑到第一次查询才炸。
+	// 开发环境可设 AIOPS_AUTO_MIGRATE=true 让单副本自行迁移,省去手动步骤。
+	if err := ensureSchema(ctx, cfg, log); err != nil {
+		log.Error("schema check failed", "err", err)
+		os.Exit(1)
+	}
 
 	// ---- Temporal(可降级)----
 	var wf interface {

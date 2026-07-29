@@ -25,6 +25,12 @@ type Config struct {
 	TemporalNS       string
 	TemporalQueue    string
 
+	// AutoMigrate 让进程启动时自行把业务库 schema 迁到最新。
+	// 默认 false:生产迁移应是独立步骤(Helm pre-upgrade Job),因为多副本滚动
+	// 更新期间自动迁移会让尚未替换的旧副本面对新 schema。开发/单副本可开启。
+	// 无论开关如何,启动时都会**校验**版本,不匹配即拒绝启动。
+	AutoMigrate bool
+
 	// 组件互联
 	ClusterAgentURL string // 单集群兼容:仅当未配置 ClusterAgents 时生效
 	// 多集群:cluster_id=url 逗号分隔,如 "prod-cn-1=https://a:9100,edge-eu-2=https://b:9100"
@@ -189,6 +195,7 @@ func Load() Config {
 		PublicAddr:       getenv("AIOPS_PUBLIC_ADDR", ":8088"),
 		InternalAddr:     getenv("AIOPS_INTERNAL_ADDR", ":8090"),
 		DBDSN:            getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
+		AutoMigrate:      getbool("AIOPS_AUTO_MIGRATE", false),
 		KafkaBrokers:     brokers,
 		TemporalHostPort: getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
 		TemporalNS:       getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),

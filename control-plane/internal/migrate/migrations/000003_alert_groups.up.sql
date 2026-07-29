@@ -1,5 +1,5 @@
 -- =============================================================================
--- 两层告警聚合模型(优化②):拆开"去重"与"聚合"两个职责。
+-- 000003 — 两层告警聚合模型:拆开"去重"与"聚合"两个职责。
 --
 -- 问题:原设计用单一 grouping_key(把 resource 编进哈希)同时承担去重与聚合,
 -- 结果只做到"同资源去重" —— 跨资源故障永远进不了同一 incident,
@@ -50,6 +50,43 @@ UPDATE incidents
 
 -- 去掉 grouping_key 的唯一约束(新模型下多个 incident 可共享/为空)
 ALTER TABLE incidents DROP CONSTRAINT IF EXISTS incidents_grouping_key_key;
+
+-- ------------------------------------------------------- 存量数据归并(必需)
+-- 旧模型下 incidents 按 grouping_key 唯一,**同一 namespace 允许多条活跃 incident**
+-- ——这正是本迁移要消除的碎片化。因此任何有存量数据的库里,
+-- 下面的部分唯一索引都会因重复 correlation_key 而创建失败。
+--
+-- 这不是假设:空库迁移测试发现不了它,只有对着"已有两条同 namespace 活跃
+-- incident"的库执行升级才会暴露 —— 也就是第一次真实生产升级。
+--
+-- 归并策略:每个 correlation_key 只保留**最近活跃**的一条(last_seen 最新),
+-- 其余标记为 closed 并用 superseded_by 指向保留的那条。刻意不删除:
+-- 值班人员可能正在看被归并的 incident,直接删会让链接 404;
+-- 保留 + 指针可追溯,也让"为什么我的 incident 突然关闭了"有答案。
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS superseded_by TEXT;
+
+WITH ranked AS (
+    SELECT incident_id,
+           correlation_key,
+           first_value(incident_id) OVER (
+               PARTITION BY correlation_key
+               ORDER BY last_seen DESC, created_at DESC, incident_id
+           ) AS keeper,
+           row_number() OVER (
+               PARTITION BY correlation_key
+               ORDER BY last_seen DESC, created_at DESC, incident_id
+           ) AS rn
+      FROM incidents
+     WHERE status IN ('open', 'acknowledged')
+)
+UPDATE incidents i
+   SET status        = 'closed',
+       closed_at     = COALESCE(i.closed_at, now()),
+       superseded_by = r.keeper,
+       updated_at    = now()
+  FROM ranked r
+ WHERE i.incident_id = r.incident_id
+   AND r.rn > 1;
 
 -- correlation_key 需要唯一以支持 find-or-create 的原子 upsert。
 -- 注:同一 namespace 在时间窗外的新故障通过"关闭旧 incident"来区分,
