@@ -101,6 +101,14 @@ func main() {
 
 	// ---- 可观测性(架构第 16 节)----
 	metrics := telemetry.New()
+	// 队列积压指标(P4):在抓取时查库,而非后台轮询 + Gauge.Set()。
+	// 轮询失败会让 Gauge 里留着上一次的成功值——数据库挂了、仪表盘还显示健康数字。
+	// 只在 internal 角色注册:/metrics 挂在内部 API 上,别的角色注册了也没人抓,
+	// 反而让不暴露端点的副本白查数据库。
+	if cfg.HasRole("internal") {
+		metrics.RegisterQueue(queueStatsAdapter{st: st}, log)
+		log.Info("queue depth metrics registered (scraped on demand)")
+	}
 	shutdownTracing, terr2 := telemetry.InitTracing(ctx, cfg.ServiceName, cfg.OTLPEndpoint)
 	if terr2 != nil {
 		log.Warn("tracing init failed (continuing without export)", "err", terr2)
