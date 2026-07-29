@@ -60,6 +60,24 @@ data:
   AIOPS_INGRESS_RATE_PER_SEC: "50"
   AIOPS_INGRESS_BURST: "500"
 
+  # ---- 自动触发策略(F7)----
+  # 此前一律触发:每个 incident 都消耗一次分诊模型调用,含 P4 单信号
+  # (磁盘用量到 80% 这类)。按每集群每天数千告警估算是持续的固定成本。
+  #
+  # 被跳过的 incident **仍然入库、仍在前端可见、仍可人工发起调查**
+  # (手动路径不过这道闸门),且会写 trigger_skipped 审计与
+  # aiops_trigger_decisions_total 指标 —— 所以"为什么这个故障没有诊断"能回答。
+  #
+  # 调阈值前先看指标里的 reason 分布:
+  #   sum by (reason) (aiops_trigger_decisions_total)
+  AIOPS_AUTO_TRIGGER_ALL: "false"              # true 完整回到旧行为(一律触发)
+  AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES: "P1,P2" # 无条件触发
+  # 可被跳过的级别。默认只含 P4:P3 是最常见级别、混着不少真问题,
+  # 拦它会显著改变值班预期。要更省可加 "P3"。
+  AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES: "P4"
+  AIOPS_AUTO_TRIGGER_BURST_SIGNALS: "3"        # 信号数达此值视为突发;0 关闭该判据
+  AIOPS_AUTO_TRIGGER_ON_CHANGE: "true"         # 变更关联必触发(最易自动定位的一类根因)
+
   # ---- 数据保留(retention)----
   # 高写入表若不清理会无界增长(signals / investigation_events / audit_log 最先出问题)。
   # 清理由 janitor 角色分批执行:只删终态数据,活跃 incident 与未结束调查永不触碰。

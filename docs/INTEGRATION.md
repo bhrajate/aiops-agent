@@ -104,6 +104,23 @@ AIOPS_S3_SECRET_KEY=minioadmin
 #   api / internal / ingest / trigger / outbox,或 all(默认全开=单体)
 #   例:API 副本 AIOPS_ROLES=api,internal;后台副本 AIOPS_ROLES=ingest,trigger,outbox
 AIOPS_ROLES=all
+# 自动触发策略(F7)。此前一律触发 —— 每个 incident 都消耗一次分诊模型调用,
+# 含 P4 单信号(磁盘到 80% 这类)。按每集群每天数千告警估算是持续的固定成本,
+# 而其中相当一部分永远不会有人看诊断结论。
+#
+# 被跳过的 incident **仍然入库、仍在前端可见、仍可人工发起调查**(手动路径
+# 不过这道闸门),且会写 trigger_skipped 审计与 aiops_trigger_decisions_total
+# 指标 —— 所以"为什么这个故障没有诊断"能回答。跳过不留痕比不拦更糟。
+#
+# 调阈值前先看 reason 分布,它是唯一需要的信息:
+#   sum by (reason) (aiops_trigger_decisions_total)
+AIOPS_AUTO_TRIGGER_ALL=false                # true 完整回到旧行为(一律触发)
+AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES=P1,P2  # 无条件触发
+# 可被跳过的级别(仍需其他判据均未命中)。默认只含 P4:P3 是最常见级别、
+# 混着不少真问题,拦它会显著改变值班人员的预期。
+AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES=P4
+AIOPS_AUTO_TRIGGER_BURST_SIGNALS=3          # 信号数达此值视为突发;0 关闭该判据
+AIOPS_AUTO_TRIGGER_ON_CHANGE=true           # 变更关联必触发(最易自动定位的根因)
 # 观测后端集群维度 label 名——**按后端分别配置**。
 #
 # 三个后端对"集群"的命名法互不兼容:

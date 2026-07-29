@@ -49,6 +49,19 @@ config:
   # 仅当观测后端确为**本集群专用**时才设 true。多集群共享后端下设 true
   # 会让 RCA 读到其他集群的同名 namespace,且该错误在诊断结论里看不出来。
   clusterLabelDisabled: false
+
+  # ---- 自动触发策略(F7)----
+  # 此前一律触发:每个 incident 都烧一次分诊模型调用,含 P4 单信号。
+  # 被跳过的仍入库、仍在前端可见、仍可人工发起调查,且写 trigger_skipped 审计
+  # 与 aiops_trigger_decisions_total 指标(按 reason 分维度)。
+  # 调阈值前先看:sum by (reason) (aiops_trigger_decisions_total)
+  autoTrigger:
+    all: false                      # true 完整回到旧行为
+    alwaysSeverities: "P1,P2"
+    # 默认只含 P4:P3 是最常见级别、混着不少真问题,拦它会显著改变值班预期。
+    skipSeverities: "P4"
+    burstSignals: 3                 # 0 关闭该判据
+    onChange: true                  # 变更关联必触发
   tenant: "default"
   publicAddr: ":8088"
   internalAddr: ":8090"

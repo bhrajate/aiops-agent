@@ -42,9 +42,11 @@ type StartArgs struct {
 // Start 以 investigation/{incident}/{version} 为 workflow id 启动(幂等:重复启动同 id 返回已存在的 run)。
 func (t *Client) Start(ctx context.Context, workflowID string, args StartArgs) (runID string, err error) {
 	opts := client.StartWorkflowOptions{
-		ID:                    workflowID,
-		TaskQueue:             t.taskQueue,
-		WorkflowIDReusePolicy: 0, // AllowDuplicate 默认策略下,同 id 若在运行会返回 already-started 错误
+		ID:        workflowID,
+		TaskQueue: t.taskQueue,
+		// 0 = UNSPECIFIED,服务端按 AllowDuplicate 处理:上一个 run 结束后同 id 可再启动,
+		// 但仍在运行时返回 already-started —— 上层的启动幂等正是依赖这个行为。
+		WorkflowIDReusePolicy: 0,
 	}
 	run, err := t.c.ExecuteWorkflow(ctx, opts, WorkflowTypeName, args)
 	if err != nil {

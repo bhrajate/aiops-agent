@@ -37,6 +37,13 @@ data:
   AIOPS_MODEL_PROVIDER: {{ .Values.config.modelProvider | quote }}
   AIOPS_ANTHROPIC_MODEL: {{ .Values.config.anthropicModel | quote }}
   AIOPS_MAX_DELIVERY_ATTEMPTS: {{ .Values.config.maxDeliveryAttempts | quote }}
+  # 自动触发策略(F7)。被跳过的 incident 仍入库、仍可人工发起调查,并写审计+指标。
+  # 调阈值前先看 sum by (reason) (aiops_trigger_decisions_total)。
+  AIOPS_AUTO_TRIGGER_ALL: {{ .Values.config.autoTrigger.all | quote }}
+  AIOPS_AUTO_TRIGGER_ALWAYS_SEVERITIES: {{ .Values.config.autoTrigger.alwaysSeverities | quote }}
+  AIOPS_AUTO_TRIGGER_SKIP_SEVERITIES: {{ .Values.config.autoTrigger.skipSeverities | quote }}
+  AIOPS_AUTO_TRIGGER_BURST_SIGNALS: {{ .Values.config.autoTrigger.burstSignals | quote }}
+  AIOPS_AUTO_TRIGGER_ON_CHANGE: {{ .Values.config.autoTrigger.onChange | quote }}
 {{- if .Values.mtls.enabled }}
   AIOPS_AGENT_TLS_ENABLED: "true"
   AIOPS_AGENT_TLS_CERT: {{ printf "%s/agent.crt" .Values.mtls.mountPath | quote }}
