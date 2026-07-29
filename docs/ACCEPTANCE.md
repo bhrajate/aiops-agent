@@ -52,6 +52,11 @@
                           scripts/check-correlation-window.sh \
                           scripts/check-blast.sh
 ./scripts/check-ratelimit.sh                # 自带构建 + 起独立实例
+# 下面三个也自带构建 + 起独立实例,同样**不要**用 with-backend.sh 包裹。
+# 前两个会**临时停掉 postgres** 来验证故障路径(退出时用 trap 恢复):
+./scripts/check-probes.sh
+./scripts/check-queue-metrics.sh
+./scripts/check-alert-rules.sh
 ```
 
 | 脚本 | 验证的不变量 | 当前结果 |
@@ -66,6 +71,9 @@
 | `check-ratelimit.sh` | 入口限流:429 + Retry-After + **按条计费** + 指标(F6) | 7/7 |
 | `check-metrics.sh` | Prometheus 指标暴露 | PASS |
 | `check-frontend-auth.sh` | 前端登录与越权 | 5/5 |
+| `check-probes.sh` | 探针语义分离:**真的停 postgres**,`/readyz` 返 503(副本被摘出 endpoints)、`/healthz` 仍 200(不重启进程)、恢复后自动放回(P3) | 9/9 |
+| `check-queue-metrics.sh` | 队列积压指标:**真的停 postgres**,四个队列 gauge 全部缺失且 `scrape_failed=1`(缺失而非上报 0)、其余指标仍正常、恢复后回来(P4) | 12/12 |
+| `check-alert-rules.sh` | 告警规则对着**真实 /metrics** 校验:语法 + metric 名存在性(引用不存在的 series 会永不触发)(P5) | 7/7 |
 | `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
 
 ## 核心设计原则落地
