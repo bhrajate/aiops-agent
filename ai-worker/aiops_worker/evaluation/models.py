@@ -1,6 +1,6 @@
 """评估服务使用的 Pydantic 模型。
 
-与 shared/sql/003_hardening.sql 中的 ``golden_cases`` 和 ``evaluation_runs``
+与 migrations/000002_hardening.up.sql 中的 ``golden_cases`` 和 ``evaluation_runs``
 两张表对齐。``signal_fixture`` 承载可复现的输入(incident 桩 + 信号),
 以保证同一用例每次重放结果完全一致。
 """

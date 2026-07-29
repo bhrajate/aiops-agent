@@ -1,10 +1,30 @@
-.PHONY: up down restart logs ps clean wait psql topics
+.PHONY: up down restart logs ps clean wait psql topics migrate migrate-version seed
+
+# 业务库 schema 迁移。与生产走**同一条**路径(control-plane migrate up),
+# 不再依赖 postgres 的 initdb 钩子——那个钩子只在数据卷首次创建时生效,
+# 会造成"改了 DDL 却不生效"。
+DB_DSN ?= postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
+
+migrate:
+	cd ../control-plane && AIOPS_DB_DSN="$(DB_DSN)" go run ./cmd/control-plane migrate up
+
+migrate-version:
+	cd ../control-plane && AIOPS_DB_DSN="$(DB_DSN)" go run ./cmd/control-plane migrate version
+
+# 开发种子数据(知识库 runbook + Golden Case)。已加幂等守卫,可重复执行。
+seed:
+	@for f in ../shared/seed/*.sql; do \
+		echo "  → $$f"; \
+		docker compose exec -T postgres psql -U aiops -d aiops -q -f - < $$f; \
+	done
 
 # 拉起全部基础设施
 up:
 	docker compose up -d
 	@echo "等待服务健康检查..."
 	@$(MAKE) wait
+	@echo "应用业务库 schema 迁移..."
+	@$(MAKE) migrate
 	@echo ""
 	@echo "基础设施就绪:"
 	@echo "  PostgreSQL(业务库)  localhost:5432  (aiops/aiops, db=aiops)"

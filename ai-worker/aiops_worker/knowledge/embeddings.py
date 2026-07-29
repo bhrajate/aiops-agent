@@ -10,7 +10,7 @@ Model Gateway 不绑定具体厂商,embedding 层同样如此。
 - 相似文本(有共同 token)在余弦距离下映射到相近的向量,
   因此 ``ORDER BY embedding <=> query`` 能返回合理的近邻。
 
-向量维度取 1536,以匹配 shared/sql/001_schema.sql 中的
+向量维度取 1536,以匹配 control-plane/internal/migrate/migrations/000001_schema.up.sql 中的
 ``knowledge_items.embedding vector(1536)``。
 """
 from __future__ import annotations

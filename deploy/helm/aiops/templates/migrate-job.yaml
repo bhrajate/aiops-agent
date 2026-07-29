@@ -1,0 +1,74 @@
+{{- /*
+业务库 schema 迁移 Job。
+
+作为 pre-install / pre-upgrade hook 在控制面副本启动**之前**执行:控制面启动时
+只校验 schema 版本、落后即拒绝启动(见 control-plane/internal/migrate),所以
+schema 必须先就绪。刻意不让控制面自己迁移——滚动更新期间新旧副本共存,
+自行迁移会让尚未替换的旧副本面对新 schema。
+
+与控制面共用同一镜像:迁移 SQL 由 go:embed 打进二进制,同镜像即同版本 SQL。
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aiops.fullname" . }}-migrate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: control-plane-migrate
+    app.kubernetes.io/component: migrate
+    {{- include "aiops.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    # 权重为负,确保排在同批 hook 的最前面。
+    "helm.sh/hook-weight": "-10"
+    # 失败的 Job **保留**:迁移失败时 Pod 日志是唯一的现场,删掉就没法定位
+    # 是哪条 SQL 失败、库是否停在 dirty 态。成功的则清理掉,不留垃圾。
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  # 迁移带 advisory lock 且幂等,重试是安全的;超过 3 次基本是 SQL 或权限问题,
+  # 继续重试只是拖长部署时间。
+  backoffLimit: 3
+  # 失败的 Job 保留一天供排查,之后自动回收。
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: control-plane-migrate
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: control-plane
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: {{ include "aiops.image" (list .Values.controlPlane . "control-plane") | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["migrate", "up"]
+          envFrom:
+            # 只需要 AIOPS_DB_DSN,但复用同一份配置可避免 DSN 在两处漂移。
+            - configMapRef:
+                name: aiops-config
+            - secretRef:
+                name: {{ include "aiops.secretName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"

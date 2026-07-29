@@ -189,11 +189,18 @@ jobs:
         with:
           go-version-file: control-plane/go.mod
           cache-dependency-path: control-plane/go.sum
-      - name: Load schema
-        # schema 应用失败应让 job 失败(不再 || true 掩盖),否则集成测试会误跑在坏库上。
+      - name: Migrate schema
+        # 走与生产**同一条**路径(control-plane migrate up),而不是直接灌 SQL:
+        # 这样 CI 同时验证迁移器本身、迁移文件的 up 顺序与版本表,而不只是终态 schema。
+        # 失败即让 job 失败(不 || true 掩盖),否则集成测试会误跑在坏库上。
+        env:
+          AIOPS_DB_DSN: postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
+        run: go run ./cmd/control-plane migrate up
+      - name: Load dev seed
+        # 种子已加幂等守卫(依赖 000005 的自然键唯一索引),重复执行不产生重复行。
         run: |
-          for f in ../shared/sql/*.sql; do
-            echo ">> applying $f";
+          for f in ../shared/seed/*.sql; do
+            echo ">> seeding $f";
             PGPASSWORD=aiops psql -h localhost -U aiops -d aiops -f "$f";
           done
       - name: go test (DB + integration)

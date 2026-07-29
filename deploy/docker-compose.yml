@@ -22,7 +22,9 @@ services:
       - "5432:5432"
     volumes:
       - ./.data/postgres:/var/lib/postgresql/data
-      - ../shared/sql:/docker-entrypoint-initdb.d:ro   # 首次启动自动执行 001_schema / 002_seed
+      # 不再挂 /docker-entrypoint-initdb.d:那个钩子只在数据卷首次创建时生效,
+      # 导致"改了 DDL 却不生效"且与生产(托管 PG 无此钩子)路径不一致。
+      # schema 统一由 `make migrate` → control-plane migrate up 建立。
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aiops -d aiops"]
       interval: 5s

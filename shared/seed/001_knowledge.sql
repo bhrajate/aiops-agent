@@ -44,4 +44,6 @@ VALUES
   '{"service":"*","environment":"production"}',
   'v1'
 )
-ON CONFLICT DO NOTHING;
+-- 依赖 000005 建立的 (tenant_id, kind, title) 唯一索引;
+-- 没有它这句是空操作(knowledge_id 默认随机 UUID,无键可冲突)。
+ON CONFLICT (tenant_id, kind, title) DO NOTHING;

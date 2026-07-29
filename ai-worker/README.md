@@ -121,7 +121,7 @@ Analyzer 通过 `workflow.gather` 并行运行,只交换结构化状态,不互�
   - **无证据支撑根因比例(幻觉率)**:`supported` 却无实时证据支撑的比例(目标 <5%);
   - **P95 首次诊断耗时**(目标 <5min)。
 - `seed_cases.py` — 5 条种子 Golden Cases,覆盖四类故障(发布回归 / 资源瓶颈 /
-  依赖超时 / Pod 异常·配置)。SQL 形式见 `shared/sql/004_seed_golden_cases.sql`。
+  依赖超时 / Pod 异常·配置)。SQL 形式见 `shared/seed/002_golden_cases.sql`。
 - `store.py` — 直连 DB 读 `golden_cases`、写 `evaluation_runs`(需 `db` extra)。
 
 CLI:

@@ -1,6 +1,6 @@
 """评估服务的数据库访问层(依赖可选的 ``db`` extra)。
 
-读取 ``golden_cases``,写入 ``evaluation_runs``(shared/sql/003)。AI worker 平时
+读取 ``golden_cases``,写入 ``evaluation_runs``(migrations/000002_hardening)。AI worker 平时
 只通过控制面访问数据库;而评估服务属于离线/运维作业,因此第一版允许它直连写库
 (任务书明确允许在此处使用 asyncpg/psycopg)。``psycopg`` 采用惰性导入,
 使导入本模块时并不需要它。

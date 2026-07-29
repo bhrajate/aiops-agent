@@ -61,7 +61,9 @@ curl -s localhost:8088/v1/signals -H 'Content-Type: application/json' -d '{
 | 控制面 `bind: address already in use :8088` | 改 `AIOPS_PUBLIC_ADDR`;检查本机占用 |
 | Redpanda `Permission denied` | 已用命名卷;`make clean && make up` 重建 |
 | Temporal 连接失败 | 控制面会降级(调查记录仍持久化);确认 `make up` 后 temporal 健康 |
-| 改了 `shared/sql` 未生效 | DDL 仅首次建卷执行;`make clean && make up` 或手动 `make psql` 执行 |
+| 改了 schema 未生效 | 新增迁移后需 `cd deploy && make migrate`;确认版本:`make migrate-version` |
+| 控制面启动报 schema 版本落后 | 先跑迁移:`make migrate`(生产由 Helm pre-upgrade Job 执行)。控制面刻意不自动迁移 |
+| schema 处于 dirty 态 | 上次迁移中途失败。人工确认哪些 SQL 已生效、补齐剩余部分,再 `control-plane migrate force <version>` 对齐版本表 |
 | Worker 无诊断 | 确认 `AIOPS_MODEL_PROVIDER=mock`(默认无需 API key);查看 worker 日志 |
 
 ## 安全模式(生产化)

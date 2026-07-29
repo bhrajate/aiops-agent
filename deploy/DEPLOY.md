@@ -149,11 +149,77 @@ RBAC(`automountServiceAccountToken: false`)。
 - **ai-worker**:`uv sync --extra dev` + `uv run pytest`(`UV_INDEX_URL` 阿里源)。
 - **frontend**:`npm ci` + `npm run build`。
 - **deploy-lint**:`helm lint` + `helm template`(dev/prod)+ kubeconform 校验清单与渲染产物。
-- **db-tests(可选)**:起 `pgvector/pgvector:pg16` service,加载 `shared/sql/*.sql` 后跑 DB 相关测试。
+- **db-tests(可选)**:起 `pgvector/pgvector:pg16` service,用 `control-plane migrate up` 建 schema 后跑 DB 相关测试(与生产同一条迁移路径)。
 - **docker**:构建四个镜像;仅默认分支登录并推送 GHCR(PR 只构建不推)。frontend 用
   `deploy/docker/frontend.Dockerfile`(构建上下文为仓库根)。
 
-## 7. 备份与恢复(架构文档 §15.2)
+## 7. 数据库 schema 迁移
+
+业务库 schema 由 **control-plane 自己管**:迁移 SQL 通过 `go:embed` 打进二进制
+(`control-plane/internal/migrate/migrations/`),同镜像即同版本 SQL,不需要额外挂载。
+
+### 7.1 生产:Helm hook Job 自动执行
+
+`helm install` / `helm upgrade` 会先跑 `pre-install,pre-upgrade` hook Job
+(`templates/migrate-job.yaml`,weight `-10`),再启动控制面副本。顺序是必需的:
+控制面启动时**只校验版本、落后即拒绝启动**,不会自己迁移。
+
+刻意不让控制面自迁移:滚动更新期间新旧副本共存,自迁移会让尚未替换的旧副本
+面对新 schema。
+
+失败的 Job **保留**(`hook-delete-policy` 不含 `hook-failed`):Pod 日志是定位
+"哪条 SQL 失败、库是否停在 dirty 态"的唯一现场。
+
+### 7.2 手工执行
+
+```bash
+# 集群内(与控制面同镜像)
+kubectl -n aiops run migrate --rm -it --restart=Never \
+  --image=ghcr.io/aiops/control-plane:v0.1.0 \
+  --overrides='{"spec":{"containers":[{"name":"migrate","image":"ghcr.io/aiops/control-plane:v0.1.0",
+    "args":["migrate","up"],"envFrom":[{"configMapRef":{"name":"aiops-config"}},
+    {"secretRef":{"name":"aiops-secrets"}}]}]}}'
+
+# 查看版本(不匹配或 dirty 时退出码 3,便于脚本判断)
+... args: ["migrate","version"]
+```
+
+本地开发:`cd deploy && make migrate`(等价于 `control-plane migrate up`),
+`make migrate-version` 查版本,`make seed` 灌开发种子(幂等)。
+
+### 7.3 并发安全
+
+golang-migrate 用 PostgreSQL advisory lock 串行化:多副本/多 Job 同时执行会排队,
+不会重复应用同一迁移。已验证 5 个并发 `migrate up` 终态正确且不 dirty。
+
+### 7.4 迁移失败与 dirty 态
+
+迁移中途失败会让版本表停在 `dirty=true`,此时控制面**拒绝启动**(这是正确行为:
+带着半截 schema 跑会在第一次查询时炸,且更难定位)。恢复步骤:
+
+1. 看 Job 日志确认失败的 SQL;
+2. 连库确认哪些语句已生效、哪些没有,手工补齐或撤销,使库处于某个**干净版本**;
+3. `control-plane migrate force <version>` 把版本表标到该版本并清 dirty
+   (它**不执行任何 SQL**,只改版本表);
+4. 重新 `migrate up`。
+
+### 7.5 回滚镜像时的 schema 兼容性
+
+`Expected` 版本编译在二进制里。回滚到旧镜像时,若新迁移不向后兼容,旧镜像会因
+"schema 版本超前"拒绝启动。此时需先 `migrate down` 回到旧版本对应的版本号 ——
+但 down 可能涉及**不可逆**操作,执行前必须确认备份可用(见 §8)。
+
+已知不可逆点:`000003` 为建立 `correlation_key` 部分唯一索引,会把同 namespace 的
+多条活跃 incident 归并为一条(保留 `last_seen` 最新者,其余置 `closed` 并用
+`superseded_by` 指向保留者)。回滚**不会**把它们改回 `open`——无法区分"被归并而
+关闭"与"本就该关闭",盲目改回会让已处理完的故障重新出现在值班列表。需要追溯时:
+
+```sql
+SELECT incident_id, superseded_by FROM incidents WHERE superseded_by IS NOT NULL;
+```
+
+
+## 8. 备份与恢复(架构文档 §15.2)
 
 目标:业务状态 **RPO ≤ 5 分钟**,控制面 **RTO ≤ 30 分钟**,月可用性 ≥ 99.9%。
 四类有状态存储**分别备份**:
@@ -169,7 +235,7 @@ RBAC(`automountServiceAccountToken: false`)。
 - **每季度执行实际恢复演练**(真正拉起副本并验证一次完整调查),而非仅检查备份任务状态。
 - 控制面完全不可用时,原监控告警链路仍独立工作(故障隔离,§15.1)。
 
-## 8. 灰度发布(架构文档 §18.3)
+## 9. 灰度发布(架构文档 §18.3)
 
 模型 / Prompt / 工具 / 策略每次升级都要过离线回归 + 小流量 Canary:
 
@@ -184,7 +250,7 @@ RBAC(`automountServiceAccountToken: false`)。
 
 发布门槛(§18.1):关键结论证据引用率 100%、未授权写操作 0、P95 首诊 < 5 分钟。
 
-## 9. 故障排查
+## 10. 故障排查
 
 | 现象 | 处理 |
 |---|---|
