@@ -63,6 +63,8 @@
 ./scripts/check-feedback-loop.sh
 # 下面这个会额外起一个 Prometheus 容器与 exporter 容器(退出时自动清理):
 ./scripts/check-slo-burnrate.sh
+# 这个**不需要任何基础设施**(只渲染 chart + 跑 validate-config),已接入 CI:
+./scripts/check-prod-guards.sh
 ```
 
 | 脚本 | 验证的不变量 | 当前结果 |
@@ -85,6 +87,7 @@
 | `check-outcome-metrics.sh` | 成效与成本指标:token/费用/时延/采纳率九个指标齐备并有值(F10) | 10/10 |
 | `check-feedback-loop.sh` | 反馈闭环:confirm 反馈 → **pending** 用例 → sre 审核 → 入评测集;oncall 不可审核;不可翻转 | 13/13 |
 | `check-slo-burnrate.sh` | 主动异常检测:起**真实 Prometheus** + 可控错误率;未越限不产出、越限产出并聚合为 P1 incident、持续燃烧仍 1 条 | 17/17 |
+| `check-prod-guards.sh` | 生产护栏**真的生效**:渲染后的清单必须显式声明 `AIOPS_ENV`/`AIOPS_DATASOURCE`;渲染结果喂给 `validate-config` 必须通过(否则生产起不来);反向逐项抽掉必需项必须被拒(证明护栏不空转);cluster-agent 与 ai-worker 在生产拒绝 mock | 24/24 |
 | `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
 
 ## 核心设计原则落地

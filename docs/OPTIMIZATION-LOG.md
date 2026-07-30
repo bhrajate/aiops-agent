@@ -1235,3 +1235,157 @@ ratelimit 7/7、orphan-reconcile 4/4、frontend-auth 5/5、blast PASS、slo-burn
 `errors.As` 单判一种错误。共同的成因:写防御代码时只想"这个错误该怎么处理",
 没想"这个错误在当前控制流下**到得了这里吗**"。
 两次都是做完之后回头推演控制流才发现的 —— 说明这一步得放到写完就做,而不是等回归。
+
+# 第八轮:生产护栏一直在空转
+
+起因是一次"能不能上生产"的整体核查。前七轮把缺陷清单清空了、把能力空白补上了,
+但这一轮发现的三个缺陷**全都不在业务逻辑里,在"护栏自己有没有在跑"这一层**。
+
+| # | 缺陷 | 严重度 | 状态 |
+|---|---|---|---|
+| G1 | `AIOPS_ENV` 不在任何部署清单 → 生产严格校验整个分支从不执行 | 阻塞 | ✅ 已修 |
+| G2 | `AIOPS_DATASOURCE` 不在任何部署清单 → cluster-agent 生产用 mock 假证据 | 阻塞 | ✅ 已修 |
+| G3 | `config.Load()` 从不给 `PrometheusURL/LokiURL/TempoURL` 赋值 → 观测后端校验恒判"未配置" | 阻塞 | ✅ 已修 |
+
+三者的关系是这一轮最值得记的东西:**G3 被 G1 掩盖着。** 单独修 G1 会让控制面
+**无条件拒绝启动**(报"必须配置至少一个观测后端",哪怕三个 URL 都配对了)。
+也就是说,如果只按"补一个环境变量"去修 G1,生产会直接起不来 ——
+而这个后果在修 G1 的那一刻是看不见的,因为在此之前那条校验从来没跑过。
+
+## 1) G1:护栏的总开关不在清单里
+
+`config.go` 的 `Env` 默认 `development`,`IsProduction()` 只认 `production`/`prod`。
+而 `deploy/helm/`、`deploy/k8s/`、`deploy/docker-compose*.yml` 里**搜不到 `AIOPS_ENV`**。
+于是按 `values-prod.yaml` 部署时,`Validate()` 的整个生产分支不执行:
+
+- `AUTH_MODE=disabled` 不被拒
+- HS256 默认密钥 / 短于 32 字节不被拒
+- 缺 `INTERNAL_TOKEN` / `WEBHOOK_SECRET` 不被拦
+- `OBS_DATASOURCE=mock` 不被拒
+- 观测后端全空不被拦(会静默回退 mock)
+- 集群维度隔离缺失不被拦
+
+`values-prod.yaml` 本身配得是对的,所以原样部署当时无害。危险在于**护栏的存在意义
+就是兜住配错**:少了这一项,任何一处漏配都不再 fail-fast,而是静默启动。
+`config_test.go` 里那 10 个生产校验用例,测的全是永不触发的分支。
+
+修法:`config.env` 加进 values 与两套 configmap。基线取 `production`
+(与 `secrets.create=false` 同一个 fail-safe 方向:默认严格,dev 显式放松),
+`values-dev.yaml` 显式覆盖为 `development`。
+
+代码默认值**不**改成 production:那会让本地跑测试被生产护栏挡住。
+严格性应该由"清单显式声明"提供,而不是靠代码默认值 —— 这也正是 G1 的教训:
+默认值宽松没问题,问题是清单没有表态。
+
+## 2) G2:cluster-agent 的数据源默认 mock,而清单同样没这一项
+
+`live.go` 的 `FromEnv()` 默认 `mock`;三套部署清单都没有 `AIOPS_DATASOURCE`;
+cluster-agent 里完全没有 production 概念,无启动校验;`DEPLOY.md` 也没提这个开关
+(只有 cluster-agent 自己的 README 提)。
+
+影响面是 7 个工具里的 4 个 —— `get_workload_state`、`get_kubernetes_events`、
+`list_recent_changes`、`inspect_dependencies` 全走 cluster-agent
+(观测那 3 个已在前几轮迁到控制面直连,所以不受影响)。
+
+`mock.go` 的注释写得很清楚:"给定相同 scope 总是返回相同且自洽的证据,
+各工具合起来能讲出一个前后一致的故障故事"。这个特性对本地演示是优点,
+在生产是最糟的失败模式:虚构数据会被冻结成 Evidence、拿到 Evidence ID、
+进入诊断结论,而 `enforce_evidence_grounding` 只校验"结论是否引用了证据",
+**不校验证据是否真实**。值班人员看到一份"有据可查"的根因,底下全是编造的 ——
+这个错误在结论里看不出来,只能在启动时挡住。
+
+控制面对观测数据源做了完全同类的校验(理由写的正是"会产出虚假证据"),
+但这条防线没延伸到 cluster-agent。修法是补上对称的护栏:
+`FromEnv()` 改为返回 error,生产模式下解析出 mock 即拒绝启动。
+**漏配与显式配 mock 一并拒绝** —— 默认值就是 mock,二者是同一种失败。
+
+同一类缺口在 ai-worker 也存在(`model_provider` 默认 mock、无任何启动校验),
+一并补上:`MockProvider` 返回的是编造的假设与诊断结论,不报错、不超时、
+schema 完全合法。`values-prod.yaml` 里配的是 anthropic,所以当时无害 ——
+但和 G1 一样,没有护栏兜着。
+
+## 3) G3:护栏自己是坏的
+
+修 G1 之后第一次让严格校验真正跑起来,它立刻报了"必须配置至少一个观测后端" ——
+而三个 URL 都设了。查下去发现 `config.Config` 声明了
+`PrometheusURL/LokiURL/TempoURL`,`Validate()` 第 417 行引用了它们,
+`config_test.go` 也覆盖了它们,但 **`Load()` 从来没给这三个字段赋值**。
+观测 URL 的实际读取在 `obsquery.ConfigFromEnv()`(变量名相同),
+控制面自己那份配置里它们恒为空。
+
+所以那条校验恒真:生产模式下无论怎么配都判"未配置观测后端"。
+
+为什么测试没抓到:`config_test.go` 的用例全部**直接构造 `Config` 字面量**
+(`base()` 里写着 `PrometheusURL: "http://prometheus:9090"`)。
+它们能证明"`Validate()` 的判断逻辑对",证明不了"`Load()` 真的把环境变量
+读进了被判断的那些字段"。缺陷就落在这道缝里。
+
+修法是 `Load()` 补上三行赋值,变量名与 `obsquery` 对齐。
+新增 `load_test.go` 专门走 **`Load()` → `Validate()` 这条真实路径**,
+并且做了反验证:临时撤掉赋值,新用例全部报红(旧用例照常全绿)。
+
+## 4) 顺带修掉:Settings 的字段默认值在 import 时求值一次
+
+给 ai-worker 加护栏时发现的。`Settings` 用的是
+`env: str = os.environ.get("AIOPS_ENV", "development")` 这种写法 ——
+dataclass 的字段默认值在**类定义时**求值,也就是 import 那一刻。
+于是 `load_settings()` 返回的永远是导入瞬间的快照,之后改环境变量不再有效,
+而它的 docstring 承诺的是"从当前环境变量构建"。
+
+生产下恰好无害(环境变量在进程启动前就位),但它会让新护栏的正确性
+**取决于 import 顺序** —— 护栏不该依赖这种东西。全部字段改用 `default_factory`。
+
+## 5) 新增:`validate-config` 子命令与 `check-prod-guards.sh`
+
+这一轮的缺陷有个共同点:**代码里写了校验,但没人验证校验会不会跑。**
+一条永不执行的校验和一条正确的校验,在任何日志、指标、探针上的表现完全一样。
+所以除了修,还得留下能发现"护栏空转"的东西。
+
+`control-plane validate-config`:只跑启动校验后退出,不连任何基础设施。
+常驻进程的 `Validate()` 之后紧跟着连库,所以"这份配置对不对"没法在没有生产库
+的地方回答 —— 而最需要回答它的时机恰恰是 CI 与上线前 dry-run。
+它会打印 `production=true/false` 与观测数据源的实际解析结果;
+非生产模式下额外告警"严格校验未执行",避免把 dev 下的 PASS 当成生产就绪的凭据。
+
+`scripts/check-prod-guards.sh`(24 项,无需基础设施,已接 CI):
+
+1. 渲染后的清单必须显式声明 `AIOPS_ENV` / `AIOPS_DATASOURCE`(prod/dev/raw 三套);
+2. 渲染出的环境变量喂给 `validate-config` 必须**通过** —— 这一条直接防住
+   "修了 G1 却让生产起不来"那个坑;
+3. 反向逐项抽掉必需项(internal token / webhook secret / 观测后端 / auth 模式),
+   必须被拒 —— 这是证明护栏**不空转**的唯一办法;
+4. cluster-agent 在生产 + mock(漏配与显式各一条)必须拒绝启动,
+   而非生产 + mock 必须能正常启动(别把零依赖演示路径误拦了);
+5. ai-worker 在生产 + mock provider 必须拒绝,+ anthropic 必须放行。
+
+CI 里放在 `deploy-lint` job:`kubeconform` 只看 YAML 合不合 schema,
+看不出"少了一个决定护栏是否生效的键"—— 而缺 `AIOPS_ENV` 的清单是完全合法的 YAML。
+
+反验证:把 `AIOPS_ENV` 从 chart 模板里临时删掉重跑,15 通过 / 9 失败,
+其中第 5 步四条反向用例全部报"护栏未拦住(空转)"—— 正是原始缺陷的表现。
+
+## 回归
+
+Go 两模块 `build` + `vet` + `test -race` 全绿(control-plane 19 包、cluster-agent 2 包);
+Python 155 passed / 3 skipped(新增 31 项:cluster-agent 护栏 15、ai-worker 护栏与求值时机 16);
+control-plane 新增 `load_test.go` 6 项;前端 `tsc -b` + `vite build` 通过;
+helm lint / template(prod+dev)通过;CI YAML 解析通过;
+`check-prod-guards.sh` 24/24。
+
+## 过程教训
+
+**"清单里少一个键"这类缺陷,任何单测都抓不到。** 三个缺陷全都跨在
+代码与部署清单的接缝上:代码侧完备(校验齐全、用例覆盖),清单侧缺一行,
+两边各自看都没问题。前七轮的用例设计得很扎实,但它们的边界是"代码",
+而生产行为的边界是"代码 + 清单"。所以这一轮加的检查全部对着**渲染后的清单**做,
+不对着源码做。
+
+**修一个失效的护栏,要先假设它掩盖了别的东西。** G3 藏在 G1 后面整整七轮,
+因为坏掉的护栏和好的护栏表现一样。打开任何一个长期没运行过的开关时,
+第一件事应该是"跑一遍看它到底报什么",而不是"补上就完了" ——
+这次如果只补 `AIOPS_ENV` 就收工,生产会直接起不来。
+
+**默认值该宽松,但清单必须表态。** 一度想过把 `Env` 的代码默认值改成 production
+来"彻底解决"G1。那是错的:本地和 CI 会立刻被生产护栏挡住。
+正确的分工是代码默认值服务于开发体验,严格性由部署清单显式声明 ——
+再加一条检查确保清单真的声明了。缺的从来不是一个安全的默认值,是一次表态。

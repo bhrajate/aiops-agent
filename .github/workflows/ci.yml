@@ -159,6 +159,19 @@ jobs:
             -f deploy/helm/aiops/values-prod.yaml \
             | /tmp/kubeconform -strict -ignore-missing-schemas -summary -
 
+      # kubeconform 只看 YAML 结构合不合 schema,看不出"少了一个决定护栏是否生效
+      # 的键"。AIOPS_ENV / AIOPS_DATASOURCE 曾长期不在任何清单里:生产校验因此
+      # 静默不执行、cluster-agent 静默用 mock 假数据,而清单本身完全合法。
+      # 这一步对着渲染结果断言这两项,并把渲染出的环境变量真的喂给二进制跑校验
+      # (含反向用例:抽掉必需项必须被拒,以证明护栏不是空转)。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: control-plane/go.mod
+      - name: 生产护栏必须生效(AIOPS_ENV / AIOPS_DATASOURCE)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash scripts/check-prod-guards.sh
+
   # ---------------------------------------------------------------- 可选的依赖数据库测试
   db-tests:
     name: control-plane DB tests (postgres)

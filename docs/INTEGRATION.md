@@ -94,6 +94,7 @@ POST /tools/{tool_name}
 > **上生产前必须显式设置的两项:`AIOPS_ENV` 与 `AIOPS_DATASOURCE`。**
 > 二者的默认值(`development` / `mock`)都是为本地零依赖开发准备的,
 > 漏配不会报错、日志无异常、指标正常 —— 只有安全护栏不生效、证据是编造的。
+> 校验:`bash scripts/check-prod-guards.sh`。
 
 ```
 # 运行环境:**所有生产护栏的总开关**,不是日志标签。

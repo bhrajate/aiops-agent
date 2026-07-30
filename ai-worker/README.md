@@ -98,6 +98,7 @@ Analyzer 通过 `workflow.gather` 并行运行,只交换结构化状态,不互�
 因为默认值就是 mock,漏配与显式配 mock 被同等对待。理由:`MockProvider` 返回的是
 **编造的**假设与诊断结论 —— 不报错、不超时、schema 完全合法、Evidence 引用齐备,
 一路写进 incident 的诊断里,值班人员没有任何线索能看出这份根因不是模型分析出来的。
+校验:`bash scripts/check-prod-guards.sh`。
 
 ## MockProvider 如何保证端到端可跑
 

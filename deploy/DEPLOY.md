@@ -98,6 +98,26 @@ helm template aiops ./aiops -n aiops -f aiops/values-prod.yaml | less
 这是刻意的:一个读生产观测数据、产出根因结论的系统,宁可拒启动也不该静默用假证据跑。
 本地开发用 `-f aiops/values-dev.yaml`。
 
+护栏本身也需要被验证 —— 一条永不执行的校验和一条正确的校验表现完全一样。
+上线前(及每次改动 chart 后)跑:
+
+```bash
+bash scripts/check-prod-guards.sh   # 24 项,无需任何基础设施;已接入 CI
+```
+
+它对着**渲染后的清单**断言这两项,把渲染出的环境变量真的喂给二进制跑一遍校验,
+并带反向用例(逐项抽掉必需项,必须被拒),以证明护栏不是空转。
+
+单独 dry-run 一份配置(不连任何基础设施,退出码即结论):
+
+```bash
+# 集群内用同一镜像核对实际注入的环境变量
+kubectl -n aiops exec deploy/control-plane -- control-plane validate-config
+```
+
+它会打印 `production=true/false` 与观测数据源的实际解析结果。
+**若看到 `production=false`,说明这套部署的安全校验一条都没在跑。**
+
 ## 3. Secret 配置
 
 字段(全部 `AIOPS_` 前缀,见 [`SECURITY.md`](../docs/SECURITY.md)):

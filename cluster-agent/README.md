@@ -16,7 +16,7 @@
   故障数据,它会照常被 Tool Gateway 冻结成 Evidence、拿到 Evidence ID、进入诊断结论,
   而 evidence-grounding 只校验"结论是否引用了证据",不校验证据是否真实 ——
   值班人员看到一份"有据可查"的根因,底下全是编造的。这种错误在结论里看不出来,
-  只能在启动时挡住。
+  只能在启动时挡住。校验:`bash scripts/check-prod-guards.sh`。
 - **范围注入**:每次调用由 Tool Gateway 传入 `scope`(cluster/namespace/resource/time_range)。`cluster_id` 缺省时回落到 Agent 配置的集群;`namespace` 必填。
 
 ## HTTP 接口

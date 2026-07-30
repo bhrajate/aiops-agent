@@ -51,6 +51,13 @@ func main() {
 		return
 	}
 
+	// `validate-config` 只跑启动校验后退出,不连任何基础设施 —— 供 CI 与上线前
+	// dry-run 回答"这份环境变量能不能用于生产",那些场景通常没有生产库可连。
+	if len(os.Args) > 1 && os.Args[1] == "validate-config" {
+		runValidateConfigCmd(log)
+		return
+	}
+
 	cfg := config.Load()
 
 	// 启动配置校验(SECURITY §1/§2/§4):生产模式下弱/缺失安全配置直接 fail-fast。
