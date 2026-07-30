@@ -27,10 +27,14 @@ db = [
     { name = "psycopg", extra = ["binary"] },
 ]
 dev = [
+    { name = "anthropic" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-sdk" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "temporalio", extra = ["opentelemetry"] },
 ]
 otel = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
@@ -41,9 +45,12 @@ otel = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.39" },
+    { name = "anthropic", marker = "extra == 'dev'", specifier = ">=0.39" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "numpy", specifier = ">=1.26,<3" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'dev'", specifier = ">=1.20" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20" },
+    { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.20" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20" },
     { name = "pgvector", marker = "extra == 'db'", specifier = ">=0.2,<1" },
     { name = "pgvector", marker = "extra == 'dev'", specifier = ">=0.2,<1" },
@@ -53,6 +60,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "temporalio", specifier = ">=1.7,<2" },
+    { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'dev'", specifier = ">=1.7" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'otel'", specifier = ">=1.7" },
 ]
 provides-extras = ["anthropic", "otel", "db", "dev"]
