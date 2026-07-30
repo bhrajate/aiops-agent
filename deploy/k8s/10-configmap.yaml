@@ -9,6 +9,22 @@ metadata:
   labels:
     app.kubernetes.io/part-of: aiops
 data:
+  # ---- 运行环境(生产护栏总开关)----
+  # 不只是日志标签:control-plane 的启动校验只在 production/prod 下执行严格分支
+  # ——拒绝 auth disabled、默认/过短 HS256 密钥、缺失 internal token 与 webhook
+  # secret、mock 观测数据源、未配置观测后端、未配置集群维度隔离。
+  # 缺失时代码默认 "development",上述每一条都变成静默放行:本文件下面那些
+  # "生产必须配"的注释就全部失去强制力,配错不再 fail-fast 而是带病启动。
+  AIOPS_ENV: "production"
+
+  # ---- cluster-agent 的 K8s 只读数据源 ----
+  # live(client-go 只读)| mock(确定性假数据)。代码默认 **mock**,所以必须显式给出。
+  # mock 会让 get_workload_state / get_kubernetes_events / list_recent_changes /
+  # inspect_dependencies 这四个工具返回虚构但自洽的"故障故事",而它们会被冻结成
+  # Evidence、拿到 Evidence ID、进入诊断结论 —— evidence-grounding 只校验结论
+  # 是否引用了证据,不校验证据是否真实。AIOPS_ENV=production 下 mock 会被拒绝启动。
+  AIOPS_DATASOURCE: "live"
+
   # ---- 网络监听 ----
   AIOPS_PUBLIC_ADDR: ":8088"
   AIOPS_INTERNAL_ADDR: ":8090"

@@ -24,9 +24,13 @@ logger = logging.getLogger("aiops_worker")
 
 async def run_worker() -> None:
     settings = load_settings()
+    # 启动校验:生产模式下拒绝 mock provider(会产出编造的假设与诊断结论)。
+    # 在连 Temporal 之前做,避免以错误配置领取任务。
+    settings.validate()
     provider = build_provider(settings)
     logger.info(
-        "starting worker: temporal=%s ns=%s queue=%s provider=%s",
+        "starting worker: env=%s temporal=%s ns=%s queue=%s provider=%s",
+        settings.env,
         settings.temporal_hostport,
         settings.temporal_namespace,
         settings.task_queue,

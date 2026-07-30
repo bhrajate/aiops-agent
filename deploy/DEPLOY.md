@@ -81,6 +81,23 @@ helm upgrade --install aiops ./aiops -n aiops --create-namespace \
 helm template aiops ./aiops -n aiops -f aiops/values-prod.yaml | less
 ```
 
+### 2.1 生产护栏:两个必须显式声明的开关
+
+`config.env` 与 `config.datasource` 决定**其余所有安全配置有没有人在检查**。
+两者的代码默认值都是为本地零依赖开发准备的(`development` / `mock`),
+而漏配的表现是:不报错、日志无异常、指标正常、`/readyz` 正常 —— 只有护栏不生效、
+证据是编造的。基线 `values.yaml` 已取 production/live,`values-dev.yaml` 显式放松。
+
+| 开关 | 生产值 | 漏配后果 |
+|---|---|---|
+| `config.env` → `AIOPS_ENV` | `production` | 控制面启动校验的**整个严格分支不执行**:auth disabled、默认/过短 HS256 密钥、缺 internal token 与 webhook secret、mock 观测源、未配观测后端、未配集群隔离,全部静默放行。fail-fast 退化成 fail-silent |
+| `config.datasource` → `AIOPS_DATASOURCE` | `live` | cluster-agent 用 mock:`get_workload_state` / `get_kubernetes_events` / `list_recent_changes` / `inspect_dependencies` 返回**虚构但自洽**的故障数据,照常冻结成 Evidence 并进入诊断结论。evidence-grounding 只校验结论是否引用了证据,不校验证据是否真实 |
+
+基线 `values.yaml` 已取 production/live,因此**chart 不再能无 values 文件裸装** ——
+`helm install` 不带 `-f` 会因为缺 OIDC issuer/JWKS 与观测后端 URL 而拒绝启动。
+这是刻意的:一个读生产观测数据、产出根因结论的系统,宁可拒启动也不该静默用假证据跑。
+本地开发用 `-f aiops/values-dev.yaml`。
+
 ## 3. Secret 配置
 
 字段(全部 `AIOPS_` 前缀,见 [`SECURITY.md`](../docs/SECURITY.md)):

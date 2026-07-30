@@ -7,6 +7,11 @@ global:
     - name: ghcr-pull
 
 config:
+  # 显式声明(与基线同值):生产护栏总开关。少了它,下面这一整套配置就没有任何
+  # 东西在启动时兜底 —— 漏配 webhook secret、错填后端 URL 都会静默跑起来。
+  env: "production"
+  # 真实 K8s 只读数据源(client-go)。mock 在 env=production 下会被拒绝启动。
+  datasource: "live"
   clusterId: "prod-cn-1"
   authMode: "oidc"
   modelProvider: "anthropic"

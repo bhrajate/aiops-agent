@@ -10,6 +10,13 @@
 - **可插拔数据源**:`internal/datasource.DataSource` 接口抽象后端。提供两种实现,由 `AIOPS_DATASOURCE` 选择(默认 `mock`):
   - **`mock`**(默认):确定性 Mock,同一 scope 永远返回同一份自洽证据,无任何 I/O。
   - **`live`**:真实只读数据源 —— 集群内 Kubernetes(`client-go`,仅 Get/List)。见下文「Live 真实数据源」。
+- **生产禁 mock**(fail-fast):`AIOPS_ENV=production|prod` 下解析出 mock 即**拒绝启动**。
+  因为默认值就是 mock,**漏配 `AIOPS_DATASOURCE` 与显式配 mock 被同等对待**。
+  理由与控制面拒绝 `AIOPS_OBS_DATASOURCE=mock` 一致:mock 返回的是虚构但**自洽**的
+  故障数据,它会照常被 Tool Gateway 冻结成 Evidence、拿到 Evidence ID、进入诊断结论,
+  而 evidence-grounding 只校验"结论是否引用了证据",不校验证据是否真实 ——
+  值班人员看到一份"有据可查"的根因,底下全是编造的。这种错误在结论里看不出来,
+  只能在启动时挡住。
 - **范围注入**:每次调用由 Tool Gateway 传入 `scope`(cluster/namespace/resource/time_range)。`cluster_id` 缺省时回落到 Agent 配置的集群;`namespace` 必填。
 
 ## HTTP 接口
@@ -104,7 +111,8 @@ cluster-agent 作为 TLS 服务端,可要求并校验调用方(control-plane)的
 |---|---|---|
 | `AIOPS_CLUSTER_AGENT_ADDR` | `:9100` | 监听地址 |
 | `AIOPS_CLUSTER_ID` | `prod-cn-1` | scope 未带 cluster_id 时的回落值 |
-| `AIOPS_DATASOURCE` | `mock` | 数据源模式:`mock` \| `live` |
+| `AIOPS_ENV` | `development` | `production`\|`prod` 时启用生产护栏(mock 数据源拒绝启动) |
+| `AIOPS_DATASOURCE` | `mock` | 数据源模式:`mock` \| `live`。**生产必须 `live`** |
 | `AIOPS_KUBECONFIG` | (空) | live 模式 kubeconfig 路径;为空时用 in-cluster,再回落 `~/.kube/config` |
 | `AIOPS_AGENT_TLS_ENABLED` | `false` | 开启 mTLS 服务端 |
 | `AIOPS_AGENT_TLS_CERT` | — | 服务端证书(PEM) |

@@ -25,10 +25,17 @@ func main() {
 	addr := env("AIOPS_CLUSTER_AGENT_ADDR", ":9100")
 	clusterID := env("AIOPS_CLUSTER_ID", "prod-cn-1")
 
-	// 可插拔的只读数据源。AIOPS_DATASOURCE 选择 mock(默认)或 live
-	// (client-go / Prometheus / Loki / Tempo)。live 模式下若上游 URL 或
-	// Kubernetes 客户端未配置,则按工具粒度降级。
-	ds, mode := datasource.FromEnv()
+	// 可插拔的只读数据源。AIOPS_DATASOURCE 选择 mock(默认)或 live(client-go)。
+	// live 模式下若 Kubernetes 客户端未配置,则按工具粒度降级(返回 unavailable)。
+	//
+	// 生产模式(AIOPS_ENV=production)下解析出 mock 会 fail-fast:mock 产出虚构但
+	// 自洽的假证据,而它会一路走到"有证据支撑"的诊断结论里,在结论上看不出来。
+	// 默认值就是 mock,所以漏配和显式配 mock 一样被拒。
+	ds, mode, err := datasource.FromEnv()
+	if err != nil {
+		log.Error("invalid datasource configuration", "err", err)
+		os.Exit(1)
+	}
 	reg := tools.NewRegistry(ds)
 	srv := server.New(clusterID, reg, log)
 

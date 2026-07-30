@@ -28,6 +28,11 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
     environment:
+      # ⚠ 这个 overlay 是**生产形态**,不是生产配置:默认 hs256 + mock provider +
+      # 无观测后端,所以 AIOPS_ENV 默认保持 development —— 设成 production 会
+      # (正确地)因为这几项而拒绝启动。真上生产请走 Helm(deploy/helm),
+      # 那里 values-prod.yaml 已声明 production/live 并由启动校验兜住。
+      AIOPS_ENV: ${AIOPS_ENV:-development}
       AIOPS_PUBLIC_ADDR: ":8088"
       AIOPS_INTERNAL_ADDR: ":8090"
       AIOPS_DB_DSN: ${AIOPS_DB_DSN:-postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable}
@@ -71,6 +76,11 @@ services:
     image: ghcr.io/aiops/cluster-agent:local
     container_name: aiops-cluster-agent
     environment:
+      # 同上:overlay 用 mock 数据源跑本地全链路。AIOPS_ENV 若设为 production,
+      # 这里必须同时设 AIOPS_DATASOURCE=live,否则 cluster-agent 拒绝启动
+      # (mock 会产出虚构但自洽的 K8s 假证据)。
+      AIOPS_ENV: ${AIOPS_ENV:-development}
+      AIOPS_DATASOURCE: ${AIOPS_DATASOURCE:-mock}
       AIOPS_CLUSTER_AGENT_ADDR: ":9100"
       AIOPS_CLUSTER_ID: prod-cn-1
       # mTLS 服务端
@@ -96,6 +106,9 @@ services:
     depends_on:
       temporal: { condition: service_healthy }
     environment:
+      # 同上:AIOPS_ENV 若设为 production,AIOPS_MODEL_PROVIDER 必须是 anthropic,
+      # 否则 worker 拒绝启动(MockProvider 返回编造的假设与诊断结论)。
+      AIOPS_ENV: ${AIOPS_ENV:-development}
       AIOPS_TEMPORAL_HOSTPORT: temporal:7233
       AIOPS_TEMPORAL_NAMESPACE: default
       AIOPS_TASK_QUEUE: investigation-ai

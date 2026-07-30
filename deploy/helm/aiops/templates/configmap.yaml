@@ -6,6 +6,13 @@ metadata:
   labels:
     {{- include "aiops.labels" . | nindent 4 }}
 data:
+  # 运行环境:生产护栏的总开关。production/prod 才会执行 control-plane 的严格
+  # 启动校验,并让 cluster-agent 拒绝以 mock 数据源启动。缺失时代码默认
+  # development —— 所有护栏静默放行,配错不再 fail-fast。
+  AIOPS_ENV: {{ .Values.config.env | quote }}
+  # cluster-agent 的 K8s 只读数据源。代码默认 mock(会产出虚构但自洽的假证据),
+  # 因此必须显式给出;env=production 下 mock 会被拒绝启动。
+  AIOPS_DATASOURCE: {{ .Values.config.datasource | quote }}
   AIOPS_PUBLIC_ADDR: {{ .Values.config.publicAddr | quote }}
   AIOPS_INTERNAL_ADDR: {{ .Values.config.internalAddr | quote }}
   AIOPS_CLUSTER_AGENT_ADDR: {{ .Values.config.clusterAgentAddr | quote }}

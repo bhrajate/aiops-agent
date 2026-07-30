@@ -246,20 +246,28 @@ func Load() Config {
 		brokers[i] = strings.TrimSpace(brokers[i])
 	}
 	return Config{
-		Env:                  getenv("AIOPS_ENV", "development"),
-		PublicAddr:           getenv("AIOPS_PUBLIC_ADDR", ":8088"),
-		InternalAddr:         getenv("AIOPS_INTERNAL_ADDR", ":8090"),
-		DBDSN:                getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
-		AutoMigrate:          getbool("AIOPS_AUTO_MIGRATE", false),
-		KafkaBrokers:         brokers,
-		TemporalHostPort:     getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
-		TemporalNS:           getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
-		TemporalQueue:        getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
+		Env:              getenv("AIOPS_ENV", "development"),
+		PublicAddr:       getenv("AIOPS_PUBLIC_ADDR", ":8088"),
+		InternalAddr:     getenv("AIOPS_INTERNAL_ADDR", ":8090"),
+		DBDSN:            getenv("AIOPS_DB_DSN", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
+		AutoMigrate:      getbool("AIOPS_AUTO_MIGRATE", false),
+		KafkaBrokers:     brokers,
+		TemporalHostPort: getenv("AIOPS_TEMPORAL_HOSTPORT", "localhost:7233"),
+		TemporalNS:       getenv("AIOPS_TEMPORAL_NAMESPACE", "default"),
+		TemporalQueue:    getenv("AIOPS_TEMPORAL_QUEUE", "investigation-ai"),
 		// 7 天。见字段说明:这不是调查时长上限(那由 Budget 管),而是异常挂死的
 		// run 的回收兜底。
 		TemporalRunTimeoutSec: getint("AIOPS_TEMPORAL_RUN_TIMEOUT_SEC", 7*24*3600),
-		ClusterAgentURL:      getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
-		ClusterAgents:        getenv("AIOPS_CLUSTER_AGENTS", ""),
+		ClusterAgentURL:       getenv("AIOPS_CLUSTER_AGENT_URL", "http://localhost:9100"),
+		ClusterAgents:         getenv("AIOPS_CLUSTER_AGENTS", ""),
+		// 共享观测后端 URL。变量名必须与 obsquery.ConfigFromEnv 保持一致 ——
+		// 那里是**实际**建连的地方,这里只为 Validate 判定"生产是否至少配了一个
+		// 后端"。此前这三个字段声明了却从不赋值,于是那条校验恒真:配对了也会被
+		// 判为"未配置观测后端"而拒绝启动。它一直没暴露,是因为 AIOPS_ENV 从未
+		// 出现在任何部署清单里 —— 生产分支从来没跑过。
+		PrometheusURL:        getenv("AIOPS_PROM_URL", ""),
+		LokiURL:              getenv("AIOPS_LOKI_URL", ""),
+		TempoURL:             getenv("AIOPS_TEMPO_URL", ""),
 		ClusterLabel:         getenv("AIOPS_CLUSTER_LABEL", ""),
 		PromClusterLabel:     getenv("AIOPS_PROM_CLUSTER_LABEL", ""),
 		LokiClusterLabel:     getenv("AIOPS_LOKI_CLUSTER_LABEL", ""),

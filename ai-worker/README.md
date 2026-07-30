@@ -93,6 +93,12 @@ Analyzer 通过 `workflow.gather` 并行运行,只交换结构化状态,不互�
 - `AIOPS_MODEL_PROVIDER=anthropic`:用 `anthropic` SDK 对接真实 Claude
   (`AIOPS_ANTHROPIC_MODEL` 默认 `claude-opus-4-8[1M]`),强制 JSON 输出并过 Pydantic 校验。
 
+**生产禁 mock**(fail-fast):`AIOPS_ENV=production|prod` 下 `model_provider=mock`
+会在连 Temporal 之前**拒绝启动**(`Settings.validate()` → `ConfigError`)。
+因为默认值就是 mock,漏配与显式配 mock 被同等对待。理由:`MockProvider` 返回的是
+**编造的**假设与诊断结论 —— 不报错、不超时、schema 完全合法、Evidence 引用齐备,
+一路写进 incident 的诊断里,值班人员没有任何线索能看出这份根因不是模型分析出来的。
+
 ## MockProvider 如何保证端到端可跑
 
 1. 无外部依赖:不读时钟、不用随机数、不需网络或密钥;
@@ -145,6 +151,14 @@ uv run python -m aiops_worker.evaluation.run --json    # 输出完整 JSON
   (匹配 `knowledge_items.embedding vector(1536)`),无需 API key、可复现、可测。
   `anthropic` / `openai` / `local` 为留桩(TODO)。选择由 `AIOPS_EMBEDDING_PROVIDER`
   决定(默认 `mock`)。
+
+  > **这里的 mock 不受生产护栏约束,是有意的**,与 `AIOPS_MODEL_PROVIDER=mock` /
+  > `AIOPS_DATASOURCE=mock` 性质不同,不要按同一类问题处理:
+  > 后两者会**编造内容**(虚构的证据、虚构的诊断),而 mock embedding 只影响
+  > **检索相关性** —— 召回的仍是知识库里真实的 runbook,只是排序不够准;
+  > 且检索结果类型恒为 `knowledge`,本就不能证明根因(只能启发假设)。
+  > 加上其余三个 provider 尚为留桩,mock 是当前唯一可用实现,拦它等于禁止生产启动。
+  > 这是**能力缺口**(真实 embedding 未接),不是正确性缺陷。
 - `store.py` — `KnowledgeStore`:为 `knowledge_items` 生成/回填 embedding,
   检索用 pgvector 余弦距离 `ORDER BY embedding <=> query`。
 - `reindex.py` — 重建 embedding 的 CLI。

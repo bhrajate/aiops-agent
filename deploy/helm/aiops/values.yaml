@@ -20,6 +20,24 @@ rbac:
 
 # ---- 非敏感配置(渲染进 ConfigMap aiops-config)----
 config:
+  # 运行环境。**这是所有生产护栏的总开关**,不只是一个日志标签:
+  # control-plane 的启动校验(config.Validate)只在 production/prod 下执行严格分支
+  # ——拒绝 auth disabled、默认/过短 HS256 密钥、缺失 internal token 与 webhook
+  # secret、mock 观测数据源、未配置观测后端、未配置集群维度隔离。
+  # 留空则代码默认 "development",于是上述每一条都变成静默放行:配错不再启动失败,
+  # 而是带着弱配置跑起来。基线因此取 production(与 secrets.create=false 同一个
+  # fail-safe 方向:默认严格,dev 显式放松)。
+  env: "production"
+
+  # cluster-agent 的 K8s 只读数据源:live(client-go)| mock(确定性假数据)。
+  # 代码默认 mock,所以**这一项必须显式给出**:mock 会为 get_workload_state /
+  # get_kubernetes_events / list_recent_changes / inspect_dependencies 这四个工具
+  # 返回虚构但自洽的"故障故事",它们会被冻结成 Evidence、拿到 Evidence ID、
+  # 进入诊断结论。evidence-grounding 只校验结论是否引用了证据,不校验证据是否真实,
+  # 所以值班人员看到的是"有据可查"的根因,底下是编造的数据。
+  # env=production 时 cluster-agent 会拒绝以 mock 启动。
+  datasource: "live"
+
   clusterId: "prod-cn-1"
 
   # ---- 共享观测后端(控制面直连 Prometheus/Loki/Tempo)----

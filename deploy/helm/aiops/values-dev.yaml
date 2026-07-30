@@ -3,6 +3,12 @@ global:
   imageTag: "dev"
 
 config:
+  # 显式放松:开发环境跳过生产严格校验,允许弱口令、mock 数据源、mock 模型。
+  # 基线(values.yaml)是 production,所以这里必须显式覆盖才能用下面的弱配置。
+  env: "development"
+  # 开发用确定性假数据:零基础设施即可端到端演示,且各工具合起来讲得出
+  # 一个前后一致的故障故事。生产下这一项为 live,且 mock 会被拒绝启动。
+  datasource: "mock"
   clusterId: "dev-1"
   authMode: "hs256"
   modelProvider: "mock"

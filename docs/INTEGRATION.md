@@ -91,7 +91,34 @@ POST /tools/{tool_name}
 
 ## 环境变量(统一前缀 `AIOPS_`)
 
+> **上生产前必须显式设置的两项:`AIOPS_ENV` 与 `AIOPS_DATASOURCE`。**
+> 二者的默认值(`development` / `mock`)都是为本地零依赖开发准备的,
+> 漏配不会报错、日志无异常、指标正常 —— 只有安全护栏不生效、证据是编造的。
+
 ```
+# 运行环境:**所有生产护栏的总开关**,不是日志标签。
+#   production | prod → 执行严格启动校验;其余值(含缺省)→ 全部跳过。
+# 严格校验覆盖:auth 不得 disabled、HS256 密钥不得为默认值/短于 32 字节、
+# 必须有 internal token 与 webhook secret、不得用 mock 观测数据源、
+# 必须配至少一个观测后端、必须配集群维度隔离。
+#
+# ⚠ 缺省是 development。生产漏配这一项的后果不是"少了个标签",而是上面每一条
+#   都变成静默放行:配错不再启动失败,而是带着弱配置正常跑起来。
+AIOPS_ENV=development                # 生产必须显式设为 production
+
+# cluster-agent 的 K8s 只读数据源:live(client-go)| mock(确定性假数据)。
+# ⚠ 缺省是 mock。mock 会让 get_workload_state / get_kubernetes_events /
+#   list_recent_changes / inspect_dependencies 返回**虚构但自洽**的故障数据,
+#   它们照常被冻结成 Evidence、拿到 Evidence ID、进入诊断结论 ——
+#   evidence-grounding 只校验"结论是否引用了证据",不校验证据是否真实。
+#   于是值班人员看到一份"有据可查"的根因,底下全是编造的。
+#   AIOPS_ENV=production 下 mock 会被拒绝启动(cluster-agent 侧 fail-fast)。
+AIOPS_DATASOURCE=mock                # 生产必须设为 live
+
+# 控制面的观测数据源。留空时:配了任一后端 URL → live;都没配 → **静默回退 mock**。
+# 生产下显式 mock 或未配任何后端都会被启动校验拒绝。
+AIOPS_OBS_DATASOURCE=                 # 留空 | mock | live
+
 AIOPS_DB_DSN=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
 AIOPS_KAFKA_BROKERS=localhost:19092
 AIOPS_TEMPORAL_HOSTPORT=localhost:7233
@@ -261,7 +288,10 @@ AIOPS_CLUSTER_AGENT_URL=http://localhost:9100   # 单集群兼容(未配置下�
 # 未在映射中的集群一律拒绝工具调用(no_agent_for_cluster),不回退到其他 Agent。
 AIOPS_CLUSTER_AGENTS=prod-cn-1=https://agent-cn1:9100,edge-eu-2=https://agent-eu2:9100
 AIOPS_CONTROL_INTERNAL_URL=http://localhost:8090
-AIOPS_MODEL_PROVIDER=mock            # mock | anthropic
+# 模型 provider。⚠ 缺省是 mock —— MockProvider 返回的是**编造的**假设与诊断结论:
+# 不报错、不超时、schema 完全合法,一路写进 incident 的诊断里,值班人员没有任何
+# 线索能看出这份根因不是模型分析出来的。AIOPS_ENV=production 下 mock 会被拒绝启动。
+AIOPS_MODEL_PROVIDER=mock            # mock | anthropic;生产必须 anthropic
 AIOPS_ANTHROPIC_API_KEY=             # 切 anthropic 时填
 AIOPS_ANTHROPIC_MODEL=claude-opus-4-8[1M]
 AIOPS_HTTP_TIMEOUT_SEC=15            # 内部 API 单次往返超时
