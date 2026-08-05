@@ -52,10 +52,6 @@ _SYSTEM = (
 )
 
 
-
-
-
-
 class AnthropicProvider(ModelProvider):
     name = "anthropic"
 
@@ -316,8 +312,6 @@ class AnthropicProvider(ModelProvider):
         return await self._complete_validated(
             prompt, _build, _fallback, capability="synthesize", max_tokens=3000
         )
-
-
 
 
 def _strip_fences(text: str) -> str:
