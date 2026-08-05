@@ -87,11 +87,24 @@ class Settings:
         """
         if not self.is_production():
             return
-        if self.model_provider == "mock":
+        # 惰性导入:model_gateway 在模块层 import 本模块的 Settings,
+        # 顶层互相 import 会成环。
+        from .model_gateway import FABRICATING_PROVIDERS, REAL_PROVIDERS  # noqa: PLC0415
+
+        if self.model_provider in FABRICATING_PROVIDERS:
             raise ConfigError(
-                "AIOPS_ENV=production 下不允许 AIOPS_MODEL_PROVIDER=mock"
-                "(会产出编造的假设与诊断结论):请设为 anthropic,"
-                "或仅在非生产环境使用 mock"
+                f"AIOPS_ENV=production 下不允许 AIOPS_MODEL_PROVIDER="
+                f"{self.model_provider}(会产出编造的假设与诊断结论):"
+                f"请设为 {' 或 '.join(sorted(REAL_PROVIDERS))} 之一,"
+                "或仅在非生产环境使用它"
+            )
+        if self.model_provider not in REAL_PROVIDERS:
+            # 拼错的 provider 名此前能通过本校验,直到 build_provider 才抛
+            # ValueError。那仍是 fail-fast,但发生在连上 Temporal**之后**,
+            # 且错误信息里没有"合法取值是什么"。启动校验该在这里就说清。
+            raise ConfigError(
+                f"未知的 AIOPS_MODEL_PROVIDER={self.model_provider!r};"
+                f"合法取值:{', '.join(sorted(REAL_PROVIDERS | FABRICATING_PROVIDERS))}"
             )
 
 

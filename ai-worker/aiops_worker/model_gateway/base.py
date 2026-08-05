@@ -12,6 +12,9 @@ import re
 import json
 
 from ..contracts import (
+    ALLOWED_TOOLS,
+    ANALYZER_TOOLS,
+    MAX_TOOL_ARG_LEN,
     AnalyzerResult,
     AnalyzerSpec,
     Evidence,
@@ -143,6 +146,55 @@ def fence_context_as_data(model, title: str = "INCIDENT_CONTEXT") -> str:
         f"{body}\n"
         f"<<END_UNTRUSTED_{title}_DATA>>"
     )
+
+
+# ---------------------------------------------------------------------------
+# 共用的提示词片段
+#
+# 放在 base 而不是某个 provider 里:两个真实 provider(手写 anthropic 与
+# pydantic-ai)必须给模型**同一份**工具目录与传参说明,否则两者的行为差异里会
+# 混进"提示词不同"这个变量,A/B 比较就失去意义。
+# ---------------------------------------------------------------------------
+
+
+def tool_catalog_text() -> str:
+    """允许的工具集合与各分析器的授权范围。"""
+    lines = ["允许的工具集合(只读):", "  " + ", ".join(sorted(ALLOWED_TOOLS)), "各分析器可用工具:"]
+    for analyzer, tools in ANALYZER_TOOLS.items():
+        lines.append(f"  {analyzer.value}: {', '.join(tools)}")
+    return "\n".join(lines)
+
+
+def query_args_help() -> str:
+    """告诉规划器该如何给工具调用传参。
+
+    如果没有这段说明,模型会省略 ``queries``,于是所有可观测性工具都退回网关的
+    通用默认表达式 —— 也就是说计划里的 ``objective`` 对实际采集到的数据毫无影响。
+    """
+    return (
+        "queries 用于**指定这次要查什么**(可选,按工具名给参数):\n"
+        f"  query_metrics: {{\"expr\": \"<PromQL>\"}}\n"
+        f"  search_logs:   {{\"query\": \"<LogQL>\"}}\n"
+        f"  get_traces:    {{\"service\": \"<服务名>\"}}\n"
+        f"  其余工具不接受参数。单个值最长 {MAX_TOOL_ARG_LEN} 字符。\n"
+        "重要:不要在表达式里写 namespace/cluster 过滤条件——服务端会强制注入范围;"
+        "写了与授权范围不一致的过滤条件会被直接拒绝。请只表达指标/日志的**语义条件**"
+        "(如聚合方式、状态码、关键字正则)。"
+    )
+
+
+def sanitize_analyzer_results(analyzer_results) -> list[dict]:
+    """把分析器的自由文本(findings)嵌入提示词之前先做净化。
+
+    分析器的 findings 源自工具证据(不可信),因此同样被当作**数据**对待。
+    """
+    out: list[dict] = []
+    for r in analyzer_results:
+        d = json.loads(r.model_dump_json())
+        if isinstance(d.get("findings"), list):
+            d["findings"] = [sanitize_untrusted_text(str(f)) for f in d["findings"]]
+        out.append(d)
+    return out
 
 
 class ModelProvider(abc.ABC):

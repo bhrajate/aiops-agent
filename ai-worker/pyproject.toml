@@ -13,6 +13,11 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.39"]
+# pydantic-ai provider(AIOPS_MODEL_PROVIDER=pydantic-ai)。与 anthropic 同为
+# 可选依赖:mock provider 与全部离线测试都不需要它。
+# 取 slim 而非完整包 —— 完整包带 pydantic-evals 与 pydantic-graph,而本项目已有
+# 自己的评估服务(aiops_worker.evaluation)与 Temporal 编排,不需要那两层。
+pydantic-ai = ["pydantic-ai-slim[anthropic]>=2.23,<3"]
 # 可观测性(架构 §16):仅在设置了 AIOPS_OTLP_ENDPOINT 时才需要。
 otel = [
     "opentelemetry-sdk>=1.20",
@@ -34,6 +39,9 @@ dev = [
     "opentelemetry-exporter-otlp-proto-http>=1.20",
     "temporalio[opentelemetry]>=1.7",
     "anthropic>=0.39",
+    # dev 里带上,否则 test_pydantic_ai_provider.py 会被 importorskip 跳过 ——
+    # 而"跳过"和"通过"在 CI 输出里长得太像,那 12 个用例会静默失去保护。
+    "pydantic-ai-slim[anthropic]>=2.23,<3",
 ]
 
 [project.scripts]

@@ -192,12 +192,25 @@ if [ -x ai-worker/.venv/bin/python ]; then
     grep -q 'ConfigError' /tmp/pg-aw.log && ok "生产 + mock provider —— 已拒绝" \
       || bad "退出了但不是 ConfigError: $(tail -c 200 /tmp/pg-aw.log)"
   fi
-  if (cd ai-worker && env AIOPS_ENV=production AIOPS_MODEL_PROVIDER=anthropic \
+  for real in anthropic pydantic-ai; do
+    if (cd ai-worker && env AIOPS_ENV=production "AIOPS_MODEL_PROVIDER=$real" \
+          .venv/bin/python -c 'from aiops_worker.config import load_settings; load_settings().validate()' \
+          >/dev/null 2>&1); then
+      ok "生产 + $real provider —— 放行"
+    else
+      bad "生产 + $real provider 被误拦"
+    fi
+  done
+  # 拼错的 provider 名此前能通过启动校验,直到 build_provider 才抛 ValueError ——
+  # 那时已连上 Temporal,且错误信息里没有"合法取值是什么"。
+  if (cd ai-worker && env AIOPS_ENV=production AIOPS_MODEL_PROVIDER=anthropc \
         .venv/bin/python -c 'from aiops_worker.config import load_settings; load_settings().validate()' \
-        >/dev/null 2>&1); then
-    ok "生产 + anthropic provider —— 放行"
+        >/tmp/pg-aw2.log 2>&1); then
+    bad "拼错的 provider 名 —— 未被拦住"
   else
-    bad "生产 + anthropic provider 被误拦"
+    grep -q '未知的 AIOPS_MODEL_PROVIDER' /tmp/pg-aw2.log \
+      && ok "拼错的 provider 名 —— 已拒绝且列出合法取值" \
+      || bad "拼错的 provider 名退出了,但错误信息没说清合法取值"
   fi
 else
   echo "   ⏭  跳过(ai-worker/.venv 不存在,先 cd ai-worker && make install)"

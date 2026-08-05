@@ -1389,3 +1389,145 @@ helm lint / template(prod+dev)通过;CI YAML 解析通过;
 来"彻底解决"G1。那是错的:本地和 CI 会立刻被生产护栏挡住。
 正确的分工是代码默认值服务于开发体验,严格性由部署清单显式声明 ——
 再加一条检查确保清单真的声明了。缺的从来不是一个安全的默认值,是一次表态。
+
+# 第九轮:用 pydantic-ai 改造结构化输出管线
+
+## 评估了三条路,只做了一条
+
+pydantic-ai 有原生 Temporal 集成(`TemporalDurability`):agent 循环跑在 workflow
+代码里,模型请求与工具调用自动路由成 activity,activity 配置(超时/重试/心跳)
+可完整定制。这比"只能待在 activity 里的库"深得多,所以值得认真评估。
+
+| 方案 | 内容 | 结论 |
+|---|---|---|
+| A | 只换结构化输出管线 | ✅ 已实施 |
+| B | 完整改造成 durable agent,agent 循环取代 planner→validate→clip→dispatch | ❌ 否 |
+| C | 混合(部分能力用 agent 循环) | ❌ 否 |
+
+### 为什么否掉 B
+
+B 换来轮内适应:模型看到指标 14:32 尖峰后可以立刻查那个时间窗的日志,
+而现在计划已经把日志查询固定了,只能等下一轮。这是**真实的**质量损失。
+
+但代价有两项是确定的:
+
+1. **丢掉事前预算闸门。** `_clip_analyzers_to_budget` 让 `max_tool_calls` 在派发前
+   就生效;pydantic-ai 的 `UsageLimits` 是超了才停。对一个把成本控制写进架构目标
+   的系统,这是降级。
+2. **丢掉计划作为审计物。** 现在计划是个可审阅对象(查什么、为什么);
+   agent 循环里推理散在 message history 里。
+
+而当前设计已有轮级适应(`missing_evidence` → `build_supplemental_plan` → 下一轮),
+只是粒度粗,且每轮之间有审计检查点。**收益不确定,代价确定。**
+
+B 要等的不是时间,是**证据**:一个"固定计划导致漏查"的生产案例。有了它,
+B 的收益就从推测变成事实。
+
+C 否掉的理由更简单:一套代码里两种控制模型,比任何单一选择都糟。
+
+## A 做了什么
+
+新增 `model_gateway/pydantic_ai_provider.py`(367 行),把
+`_parse` / `_strip_fences` / 修复重问 / 兜底那一段(约 120 行)换成
+pydantic-ai 的 `output_type`。模型被要求调用一个由契约 schema 生成的工具,
+schema 在**采样层**就约束了输出,不必事后补救。
+
+校验失败后的重问也交给框架:`@agent.output_validator` 里 `raise ModelRetry(msg)`
+把 msg 回喂给模型并重试。
+
+**没有**替换:工作流编排、`validate_plan` 白名单、预算裁剪、evidence grounding、
+Go 侧 scope 注入。刻意**不用** pydantic-ai 的工具调用能力 —— 工具仍由工作流按计划
+派发,`max_tool_calls` 因此保持为事前闸门。
+
+### 并存而非取代,是这一轮最重要的决定
+
+新增模块而不是改写 `anthropic_provider.py`,三个理由:
+
+1. 现有 9 个健壮性用例继续跑在**真实使用中**的代码上,不是被重写后的版本上;
+2. "tool-calling 结构化输出更可靠"是一般规律,**不是本系统的实测结论** ——
+   两个 provider 并存才能在真实流量上比;
+3. 回退是改一个环境变量,不是 revert 一个提交。
+
+第 2 点是我一开始推荐 A 时就写明的反面意见:现有解析代码能用、有测试、行为已知,
+用依赖替换它在功能上不增加任何东西。并存把这个反面意见变成了可验证的问题,
+而不是必须先信一边。
+
+### 提示词构造下沉到 base
+
+`tool_catalog_text` / `query_args_help` / `sanitize_analyzer_results` 从
+`anthropic_provider` 移到 `base`。理由不是去重 —— 而是这三段定义了
+"模型看到的工具目录、传参规则、findings 的净化口径"。
+
+不共用的话,两个 provider 的行为差异里会混进"提示词不同"这个变量,A/B 比较失去
+意义。净化口径尤其不能分叉:那是提示注入防线(架构 14.2),两份等于两条深浅
+不同的线。有专门用例断言三个函数在两个 provider 里是**同一个对象**。
+
+## 顺带修掉:拼错的 provider 名能通过启动校验
+
+加护栏时发现的。`Settings.validate()` 原本只判 `== "mock"`,于是
+`AIOPS_MODEL_PROVIDER=anthropc`(拼错)能通过生产校验,一直到 `build_provider`
+才抛 `ValueError` —— 那时已经连上 Temporal,且错误信息里没有"合法取值是什么"。
+
+改为对着 `REAL_PROVIDERS` / `FABRICATING_PROVIDERS` 两个显式集合判断。
+分成两个集合而不是写死字符串:新增 provider 时必须显式表态它属于哪一类,
+而不是靠"不叫 mock 就安全"这个默认 —— 那个默认正是第八轮 G2 的成因。
+
+## 验证
+
+新增 `tests/test_pydantic_ai_provider.py`(12 项,用 `FunctionModel` 注入受控响应,
+不走网络)。重点不是"pydantic-ai 能用",而是新 provider 是否保住了手写版守住的
+那些性质。
+
+**两处反验证**(证明用例不是空转):
+
+- 摘掉 `build_plan` 的白名单校验器 → `test_whitelist_violation_triggers_retry_with_reason`
+  报 `assert 1 == 2`(越权工具没触发重问)。
+- 把 `_run` 的 `except` 改成 `raise` → **4 个**兜底用例同时失败,
+  日志印出真实异常 `UnexpectedModelBehavior: Exceeded maximum output retries (1)`。
+
+第二处尤其值得记:第一次尝试摘兜底时我把 `try:` 换成 `if True:`,结果是
+`SyntaxError`,整个文件收集失败 —— **那证明不了任何事**,只证明语法错会被发现。
+改成让 `except` 分支 `raise` 才是有效的变异:语法合法、异常逃逸、兜底路径不被走到。
+变异测试的变异体必须是"合理但错误的实现",不是"坏掉的文件"。
+
+`check-prod-guards.sh` 24 → 26 项,新增"生产 + pydantic-ai 放行"与
+"拼错的 provider 名被拒且列出合法取值"。
+
+全量:Python **167 passed / 3 skipped**(新增 12);Go 两模块 build+vet+test 干净;
+`check-prod-guards.sh` 26/26。
+
+## 一处必须长期守住的不变量
+
+`UnexpectedModelBehavior` 必须在 provider **内部**捕获并转成低置信度兜底。
+
+pydantic-ai 把它注册进 Temporal 的 `workflow_failure_exception_types`,
+逃出去会让整条 workflow 失败。而 `anthropic_provider.py` 的设计写明不抛异常是
+**刻意**的:解析失败应当返回兜底、由工作流升级到 `needs_human`,而不是
+"确定性地耗尽 Temporal 的 3 次重试并让整次调查崩掉"。
+
+若让它逃出去,这个设计决定会**静默反转** —— 代码看着对,失效方式不报错。
+`_run` 是唯一出口,兜底契约集中在那里,4 个用例钉住。
+
+`_run` 的 `except Exception` 范围刻意放宽:重试耗尽是 `UnexpectedModelBehavior`,
+但还可能是鉴权错误、网络错误、pydantic-ai 自身的 `UserError`。它们的共同点是
+"这一次能力调用没拿到可用输出",处置方式相同。
+
+## 过程教训
+
+**我差点把一个不存在的阻塞写进决策记录。** 装完 pydantic-ai 后第一次跑全量套件,
+120 秒超时;我据此准备判定"一个会卡住测试收集的依赖不值得引入"并暂缓 A。
+分步归因后发现:`--collect-only` 0.34 秒正常,两个 Temporal 用例单独跑各 1.4 秒
+通过,再跑全量 **2.56 秒全绿**。那次超时是 Temporal 测试服务器二进制在 venv 变更
+后重新下载,与 pydantic-ai 的 import 无关。
+
+如果按第一次观测就下结论,决策记录里会留下一条**归因错误**的理由 ——
+而错误的理由比没有记录更糟:它会让日后重启这个方案的人先去排查一个不存在的问题。
+
+一次超时不是证据,分步归因才是。这与前八轮反复吃的亏是同一类:
+**断言拿着不可信数据。** 只是这次不可信的是我自己的一次观测。
+
+**usage 映射是容易漏的一处。** `result.usage` 是**属性**不是方法,且跨重试累计。
+预算闸门(`max_tokens` / `max_cost_usd`)与 F10 成本指标都读它 —— 少算的失效方式是
+"预算永远用不完",不报错、指标看着正常,只是闸门不再生效。
+`RunUsage.cost` 由 pydantic-ai 按厂商定价算出,比手写版的估算更准;
+拿不到时留 0,宁可少算也不要编一个数进成本指标。

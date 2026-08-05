@@ -87,6 +87,7 @@
 | `check-outcome-metrics.sh` | 成效与成本指标:token/费用/时延/采纳率九个指标齐备并有值(F10) | 10/10 |
 | `check-feedback-loop.sh` | 反馈闭环:confirm 反馈 → **pending** 用例 → sre 审核 → 入评测集;oncall 不可审核;不可翻转 | 13/13 |
 | `check-slo-burnrate.sh` | 主动异常检测:起**真实 Prometheus** + 可控错误率;未越限不产出、越限产出并聚合为 P1 incident、持续燃烧仍 1 条 | 17/17 |
+| `test_pydantic_ai_provider.py` | pydantic-ai provider 保住手写版的四类性质:失败绝不抛异常而是兜底(4 项,反验证过)、白名单违规触发带原因的重问、凭空 evidence_id 被丢弃、usage 真实填充;两个 provider 共用同一份提示词与净化口径 | 12/12 |
 | `check-prod-guards.sh` | 生产护栏**真的生效**:渲染后的清单必须显式声明 `AIOPS_ENV`/`AIOPS_DATASOURCE`;渲染结果喂给 `validate-config` 必须通过(否则生产起不来);反向逐项抽掉必需项必须被拒(证明护栏不空转);cluster-agent 与 ai-worker 在生产拒绝 mock | 24/24 |
 | `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
 

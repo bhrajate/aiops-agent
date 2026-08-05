@@ -291,8 +291,18 @@ AIOPS_CLUSTER_AGENTS=prod-cn-1=https://agent-cn1:9100,edge-eu-2=https://agent-eu
 AIOPS_CONTROL_INTERNAL_URL=http://localhost:8090
 # 模型 provider。⚠ 缺省是 mock —— MockProvider 返回的是**编造的**假设与诊断结论:
 # 不报错、不超时、schema 完全合法,一路写进 incident 的诊断里,值班人员没有任何
-# 线索能看出这份根因不是模型分析出来的。AIOPS_ENV=production 下 mock 会被拒绝启动。
-AIOPS_MODEL_PROVIDER=mock            # mock | anthropic;生产必须 anthropic
+# 线索能看出这份根因不是模型分析出来的。AIOPS_ENV=production 下 mock 会被拒绝启动,
+# 拼错的 provider 名也会(此前只拦 mock,拼错要等到 build_provider 才抛)。
+#
+#   mock        零依赖确定性假数据,仅非生产
+#   anthropic   手写结构化输出管线(JSON 文本 -> 解析 -> 修复重问 -> 兜底)
+#   pydantic-ai 同一个模型与密钥,结构化输出交给 pydantic-ai 的 output_type
+#               (tool-calling,schema 在采样层约束)。需装 [pydantic-ai] extra
+#
+# 后两者共用同一份提示词与系统指令,差异只在结构化输出如何取得 —— 这样才能在真实
+# 流量上比较,而不是靠推断。两者的失败处置也一致:绝不抛异常,返回低置信度兜底
+# 让工作流升级到 needs_human。
+AIOPS_MODEL_PROVIDER=mock            # mock | anthropic | pydantic-ai;生产必须后两者之一
 AIOPS_ANTHROPIC_API_KEY=             # 切 anthropic 时填
 AIOPS_ANTHROPIC_MODEL=claude-opus-4-8[1M]
 AIOPS_HTTP_TIMEOUT_SEC=15            # 内部 API 单次往返超时

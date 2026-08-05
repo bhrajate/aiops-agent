@@ -93,6 +93,20 @@ Analyzer 通过 `workflow.gather` 并行运行,只交换结构化状态,不互�
 - `AIOPS_MODEL_PROVIDER=anthropic`:用 `anthropic` SDK 对接真实 Claude
   (`AIOPS_ANTHROPIC_MODEL` 默认 `claude-opus-4-8[1M]`),强制 JSON 输出并过 Pydantic 校验。
 
+- `AIOPS_MODEL_PROVIDER=pydantic-ai`:同一个模型与密钥,但结构化输出交给
+  pydantic-ai 的 `output_type`(tool-calling,schema 在采样层约束),而不是
+  "要求模型吐 JSON 文本再自己解析 + 修复重问"。需装 `[pydantic-ai]` extra。
+
+  与 `anthropic` **并存而非取代**:两者共用同一份提示词、系统指令与净化口径
+  (都取自 `model_gateway/base.py`),差异只在结构化输出如何取得 —— 这样才能在
+  真实流量上比较可靠性,而不是靠"tool-calling 一般更可靠"这个推断。
+  回退是改一个环境变量,不是 revert 一个提交。
+
+  两者的失败处置必须一致且已用测试钉住:**绝不抛异常**,返回低置信度兜底让
+  工作流升级到 `needs_human`。pydantic-ai 把 `UnexpectedModelBehavior` 注册进
+  Temporal 的 `workflow_failure_exception_types`,逃出 provider 会让整条 workflow
+  失败 —— 那会把"升级给人工"静默反转成"整条调查崩掉"。
+
 **生产禁 mock**(fail-fast):`AIOPS_ENV=production|prod` 下 `model_provider=mock`
 会在连 Temporal 之前**拒绝启动**(`Settings.validate()` → `ConfigError`)。
 因为默认值就是 mock,漏配与显式配 mock 被同等对待。理由:`MockProvider` 返回的是
