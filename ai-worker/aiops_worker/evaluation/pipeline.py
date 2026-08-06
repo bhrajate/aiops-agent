@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..contracts import (
+    AnalyzerResult,
     AnalyzerSpec,
     DiagnosisResult,
     Evidence,
@@ -87,9 +88,30 @@ def _offline_collect(
 class OfflineReplayPipeline:
     """端到端跑完单个黄金用例的重放。
 
-    与工作流的有界 RCA 循环保持一致:先做一轮「规划 + 采集 + 综合」,若结论不明确
-    但仍有可执行的下一步,则再跑一轮补充采集。整体保持确定性(不含随机数);
-    唯一的时钟读取用于测量墙钟耗时,不影响诊断结果。
+    与工作流的有界 RCA 循环保持一致:先做一轮「规划 + 采集 + 分析 + 综合」,
+    若结论不明确但仍有可执行的下一步,则再跑一轮补充采集。整体保持确定性
+    (不含随机数);唯一的时钟读取用于测量墙钟耗时,不影响诊断结果。
+
+    ## 它**测不到**什么(重要)
+
+    本管线复现的是推理链,不是 Temporal 编排。以下工作流行为在离线完全不存在,
+    因此**质量闸门全绿不代表它们是对的**:
+
+    - **预算护栏**:没有 ``Budget``,没有 ``max_tool_calls`` 事前裁剪
+      (``_clip_analyzers_to_budget``),没有 token / 成本 / 时长上限。
+      预算相关的改动必须靠 ``test_workflow_budget_clip.py`` 与
+      ``test_workflow_replay.py`` 验证。
+    - **轮次语义**:这里 ``max_rounds`` 默认 2,工作流的 ``Budget.max_rounds``
+      默认 3;工作流还有 ``round_index`` 自增时机、``escalation_reason`` 分支。
+    - **升级与阶段迁移**:``needs_human`` / ``waiting_feedback`` / 人工反馈超时
+      全部没有。
+    - **幂等与重放**:activity 重试、心跳、``continue_as_new`` 一概不涉及。
+
+    这不是缺陷,是刻意的取舍:离线要快且确定,不该起 Temporal。但**必须写明** ——
+    第七轮的跨轮证据缺陷(第 2 轮综合器看不到第 1 轮证据,正确结论被降级)在
+    离线评测里完全不可见,而当时没人意识到这个盲区,因为闸门是全绿的。
+
+    已知的盲区不危险,被误认为有覆盖的盲区才危险。
     """
 
     def __init__(self, provider: Optional[ModelProvider] = None, max_rounds: int = 2):
@@ -132,11 +154,24 @@ class OfflineReplayPipeline:
                         content_hash=f"h-kb-{case_id}-{round_index}-{i}",
                     )
                 )
+            # 逐分析器:先采集本步的实时证据,再让**分析器能力**产出结构化解读。
+            #
+            # 此前这里只采集、不调用 provider.analyze() —— 于是四个推理能力里的
+            # analyzer 完全不被评测覆盖,而 synthesize 恒收到 analyzer_results=[]。
+            # 后果有两层:分析器退化不会让闸门变红(evidence_citation_rate 与
+            # hallucination_rate 都算不到它);且综合器在离线看到的**入参形状**与
+            # 生产不同,离线分数因此不能代表生产会发布什么。
+            round_results: list[AnalyzerResult] = []
             for j, spec in enumerate(plan.analyzers):
-                evidences.append(_offline_collect(case_id, spec, round_index * 100 + j))
+                ev = _offline_collect(case_id, spec, round_index * 100 + j)
+                evidences.append(ev)
+                # 只把本分析器自己采到的证据交给它 —— 与工作流一致
+                # (run_analyzer 只看 spec 对应的 evidences,不看别人的)。
+                result, _ = await self._provider.analyze(context, spec, [ev])
+                round_results.append(result)
 
             synthesis, _ = await self._provider.synthesize(
-                context, evidences, [], round_index
+                context, evidences, round_results, round_index
             )
             # 在此重放运行时的证据优先守卫,使离线分数反映生产环境真正会发布的内容
             # (F2)。否则一次评估可能通过闸门,而运行时其实会拒绝该结论。

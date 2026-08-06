@@ -38,10 +38,12 @@ ai-worker/
 │   ├── workflow.py           # InvestigationWorkflow 状态机
 │   ├── main.py               # Worker 入口(连 Temporal、注册、运行)
 │   ├── model_gateway/
-│   │   ├── __init__.py       # build_provider 工厂
-│   │   ├── base.py           # ModelProvider 抽象 + 注入防护助手
+│   │   ├── __init__.py       # build_provider 工厂 + 生产/虚构 provider 分类
+│   │   ├── base.py           # ModelProvider 抽象(四种能力接口)
+│   │   ├── prompt_safety.py  # 提示注入防御 + 共用提示词构造(architecture 14.2)
 │   │   ├── mock.py           # 确定性 MockProvider(四类故障场景)
-│   │   └── anthropic_provider.py  # 真实 Claude(可选依赖)
+│   │   ├── anthropic_provider.py    # 真实 Claude,手写结构化输出管线(可选依赖)
+│   │   └── pydantic_ai_provider.py  # 真实 Claude,输出交给 pydantic-ai(可选依赖)
 │   ├── evaluation/           # 评测服务(离线回放 + 质量门槛,architecture 18)
 │   │   ├── models.py         # GoldenCase / EvaluationResult / RunSummary
 │   │   ├── pipeline.py       # OfflineReplayPipeline(无 Temporal)
@@ -54,7 +56,8 @@ ai-worker/
 │       ├── embeddings.py     # EmbeddingProvider + 确定性 MockEmbeddingProvider
 │       ├── store.py          # KnowledgeStore(索引/余弦检索,db extra)
 │       └── reindex.py        # CLI: python -m aiops_worker.knowledge.reindex
-└── tests/                    # 不依赖真实 Temporal / 网络(DB 集成测试自动跳过)
+└── tests/                    # 不需运行中的 Temporal(DB 集成测试自动跳过;
+                              # 但时间跳跃环境首次需联网下载测试服务器,见下文)
 ```
 
 ## 状态机(architecture 7.3 / 7.4)
@@ -202,12 +205,29 @@ make install            # uv sync --extra dev(含 psycopg/pgvector,可跑 DB 集
 # 需要真实 Claude 时:make install-anthropic
 ```
 
-运行测试(不需 Temporal / 网络):
+运行测试(不需**运行中**的 Temporal 服务):
 
 ```bash
 make test               # uv run pytest -q
 make check-import       # uv run python -c "import aiops_worker.workflow"
 ```
+
+> **首次运行需要网络。** `test_workflow_replay.py` 与 `test_cross_round_evidence.py`
+> 用 `WorkflowEnvironment.start_time_skipping()` 起一个进程内测试服务器,
+> temporalio SDK 会从 GitHub **下载**那个二进制并缓存。
+>
+> 下载失败的表现是**静默挂住**(不报错、不超时、无输出),而不是干净地失败 ——
+> 我们在一个只能走代理的环境里为此误判过好几轮:全量套件卡死 120 秒,
+> 看着像"某个依赖破坏了测试收集",实际 `--collect-only` 只需 2.4 秒。
+>
+> 若直连 GitHub 不通,带代理跑**一次**即可(之后走缓存,全量约 5 秒):
+>
+> ```bash
+> HTTPS_PROXY=http://127.0.0.1:8897 HTTP_PROXY=http://127.0.0.1:8897 make test
+> ```
+>
+> 排查顺序:`pytest --collect-only -q` 快 = 不是 import 问题;
+> 再 `--ignore` 掉上面两个文件,若其余用例秒过,即可确认是测试服务器下载。
 
 DB 集成测试(pgvector 检索 + evaluation_runs 写入)默认跳过;设置可达的
 `AIOPS_DB_DSN` 后会自动纳入:

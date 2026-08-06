@@ -317,6 +317,12 @@ class InvestigationWorkflow:
         # ``round_index`` 统计**已完成**的采集轮数。在 ``max_rounds=N`` 时,循环恰好
         # 跑 N 轮采集(轮次计数在一轮**结束**时才自增,因此 N=3 不会再悄悄只跑 2 轮)。
         # 下面轮次之间的预算检查只是兜底;真正权威的轮数守卫在自增之后。
+        #
+        # ⚠ 本循环**不受离线评测保护**。evaluation/pipeline.py 复现的是推理链,
+        # 没有预算裁剪、没有升级分支,轮次语义也不同(它默认 2 轮,这里默认 3)。
+        # 改动这里必须用 test_workflow_replay.py / test_cross_round_evidence.py
+        # (时间跳跃环境跑真实工作流)验证 —— 质量闸门全绿不能说明这里是对的。
+        # 第七轮的跨轮证据缺陷就是这样溜过去的:离线全绿,缺陷只在多轮时可见。
         while True:
             if self._should_cancel():
                 return await self._finish_cancelled(inp)
