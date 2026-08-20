@@ -3,7 +3,7 @@ module github.com/aiops/cluster-agent
 go 1.26
 
 // 固定已修补的工具链(与 control-plane 一致):见该模块 go.mod 说明。
-toolchain go1.26.5
+toolchain go1.26.6
 
 require (
 	github.com/prometheus/client_golang v1.24.1
