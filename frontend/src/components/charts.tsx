@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from 'react'
 import type { CountPair, TrendBucket } from '@/api/types'
 import { cn, formatClock, formatCount } from '@/lib/format'
+import { trendGeometry, barRatio } from './chartMath'
 
 // 手写 SVG 图表而不是引入 recharts/echarts。
 //
@@ -43,7 +44,9 @@ export function BarDistribution({
   return (
     <ul className="space-y-2">
       {items.map((it) => {
-        const ratio = max > 0 ? it.count / max : 0
+        // 宽度换算走 chartMath.barRatio(有测试钉住边界)。
+        // 不在这里内联算:那会让同一个公式有两份实现,而两份迟早漂移。
+        const widthPct = barRatio(it.count, max)
         const share = total > 0 ? it.count / total : 0
         const Tag = onSelect ? 'button' : 'div'
         return (
@@ -77,7 +80,7 @@ export function BarDistribution({
                     'h-full rounded-full transition-all',
                     colorOf?.(it.key) ?? 'bg-accent',
                   )}
-                  style={{ width: `${Math.max(ratio * 100, it.count > 0 ? 2 : 0)}%` }}
+                  style={{ width: `${widthPct}%` }}
                 />
               </div>
             </Tag>
@@ -104,16 +107,12 @@ export function TrendChart({
   const [hover, setHover] = useState<number | null>(null)
 
   const { paths, max, w, h } = useMemo(() => {
-    const w = 600
-    const h = height
     const n = buckets.length
-    // max 至少为 1:全零时不能除以 0,且平坦的零线应该贴底而不是居中。
-    const max = Math.max(
-      1,
-      ...buckets.map((b) => Math.max(b.new, b.resolved, b.investigations)),
-    )
-    const x = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * w)
-    const y = (v: number) => h - (v / max) * (h - 8) - 4
+    const peak = buckets.length
+      ? Math.max(...buckets.map((b) => Math.max(b.new, b.resolved, b.investigations)))
+      : 0
+    // 坐标换算走 chartMath.trendGeometry(有测试钉住 n≤1 与全零两个除零边界)。
+    const { w, h, max, x, y } = trendGeometry(n, height, peak)
 
     function line(get: (b: TrendBucket) => number): string {
       if (n === 0) return ''
