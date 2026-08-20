@@ -2,8 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
+/* 语义化设计 token。
+   值是裸 RGB 三元组,便于在 tailwind.config.js 里用
+   `rgb(var(--token) / <alpha-value>)` 组合透明度。
+   明暗切换靠 <html> 上的 .dark / .light 类,不用 media query ——
+   值班台需要"我就要深色"这个显式选择,跟随系统只是其中一个选项。 */
+:root.dark {
+  /* 画布往冷蓝偏一点(不是纯中性灰):值班台长期盯屏,
+     纯 zinc 读作"匿名黑",略带蓝显得是个仪表台。 */
+  --bg: 9 12 18;
+  --bg-soft: 13 17 25;
+  --card: 18 23 33;
+  --card-soft: 23 29 41;
+  --border: 33 42 58;
+  --border-soft: 28 36 50;
+  --text: 226 232 240;      /* slate-200 */
+  --text-muted: 148 163 184; /* slate-400 */
+  --text-faint: 100 116 139; /* slate-500 */
+  --accent: 56 189 248;      /* sky-400 —— 延续原值班台的青色主色 */
+  --accent-strong: 14 165 233;
+  --accent-fg: 4 14 22;
+  --ok: 52 211 153;          /* emerald-400 */
+  --warn: 251 191 36;        /* amber-400 */
+  --danger: 248 113 113;     /* red-400 */
+  --info: 129 140 248;       /* indigo-400 */
+  /* 级别色:P1 最烈,到 P4 收敛成信息蓝。 */
+  --p1: 248 113 113;
+  --p2: 251 146 60;
+  --p3: 251 191 36;
+  --p4: 56 189 248;
+}
+
+/* 浅色主题。白天值班与投屏用。
+   基调偏冷白(不是纯白),卡片纯白,边框做到清晰可见 ——
+   浅色下若边框太淡,密集表格会糊成一片。 */
+:root.light {
+  --bg: 244 246 250;
+  --bg-soft: 249 250 252;
+  --card: 255 255 255;
+  --card-soft: 248 250 252;
+  --border: 203 213 225;     /* slate-300,清晰可见 */
+  --border-soft: 226 232 240;
+  --text: 15 23 42;          /* slate-900 */
+  --text-muted: 71 85 105;   /* slate-600 */
+  --text-faint: 100 116 139; /* slate-500 */
+  /* 浅色下 sky-400 在白底上对比不足(约 2.1:1),压到 sky-700 才过 AA。 */
+  --accent: 3 105 161;
+  --accent-strong: 7 89 133;
+  --accent-fg: 255 255 255;
+  --ok: 4 120 87;            /* emerald-700 */
+  --warn: 180 83 9;          /* amber-700 */
+  --danger: 185 28 28;       /* red-700 */
+  --info: 67 56 202;         /* indigo-700 */
+  --p1: 185 28 28;
+  --p2: 194 65 12;
+  --p3: 180 83 9;
+  --p4: 3 105 161;
 }
 
 html,
@@ -12,11 +66,22 @@ body,
   height: 100%;
 }
 
+html {
+  background-color: rgb(var(--bg));
+}
+html.dark {
+  color-scheme: dark;
+}
+html.light {
+  color-scheme: light;
+}
+
 body {
   margin: 0;
-  background-color: #0a0e14;
-  color: #e2e8f0;
+  background-color: rgb(var(--bg));
+  color: rgb(var(--text));
   font-family:
+    'Inter',
     system-ui,
     -apple-system,
     'Segoe UI',
@@ -25,18 +90,159 @@ body {
     'Microsoft YaHei',
     sans-serif;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-/* 细滚动条,贴合值班台风格 */
+/* 表格数字用等宽字形,避免逐秒刷新时列宽跳动 ——
+   值班台的计数是一直在变的,字宽不定会让整张表看起来在抖。 */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 细滚动条 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #334155 transparent;
+  scrollbar-color: rgb(var(--border)) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
 *::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: rgb(var(--border));
   border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--text-faint));
+}
+
+/* 粘性玻璃页头。页面用 .app-header 叠加自己的边框/内距。 */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  backdrop-filter: blur(10px);
+  background-color: rgb(var(--bg) / 0.88);
+  border-bottom: 1px solid rgb(var(--border-soft));
+}
+html.light .app-header {
+  /* 浅色下用更高不透明度:模糊后的内容会透上来影响页头文字可读性。 */
+  background-color: rgb(var(--card) / 0.94);
+}
+
+/* 焦点环:键盘可达性。表单控件靠自身边框变化提示焦点,
+   额外的外环在输入框上读作"浮空边框",故单独关掉。 */
+*:focus-visible {
+  outline: 2px solid rgb(var(--accent) / 0.7);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+input:focus,
+input:focus-visible,
+textarea:focus,
+textarea:focus-visible,
+select:focus,
+select:focus-visible {
+  outline: none !important;
+}
+
+/* 微动效。尊重 prefers-reduced-motion —— 值班台会长时间开着,
+   动效对前庭敏感人群是实际负担。 */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgb(var(--danger) / 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgb(var(--danger) / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(var(--danger) / 0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .anim-rise {
+    animation: rise 240ms ease-out both;
+  }
+  .anim-fade {
+    animation: fade-in 200ms ease-out both;
+  }
+  .anim-scale {
+    animation: scale-in 180ms ease-out both;
+  }
+  .anim-pulse-ring {
+    animation: pulse-ring 2s ease-out infinite;
+  }
+}
+
+/* 打印:导出调查报告用。把界面壳隐掉,只留报告主体,
+   并强制浅色(深色背景打印会吃掉整盒墨)。 */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  html,
+  body,
+  .print-area {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    background: #fff !important;
+  }
+  .print-area * {
+    overflow: visible !important;
+    color: #0f172a !important;
+    background-color: transparent !important;
+    border-color: #e2e8f0 !important;
+  }
+  .print-area section,
+  .print-area .rounded-xl,
+  .print-area .rounded-lg {
+    break-inside: avoid;
+  }
+  @page {
+    margin: 12mm;
+  }
 }

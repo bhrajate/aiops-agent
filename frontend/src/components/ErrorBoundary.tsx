@@ -33,25 +33,26 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="flex min-h-screen items-center justify-center bg-bg px-4">
           <div className="w-full max-w-md text-center">
             <div className="mb-4 flex justify-center">
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
-                <AlertTriangle className="h-6 w-6 text-red-400" />
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-danger/10">
+                <AlertTriangle className="h-6 w-6 text-danger" />
               </span>
             </div>
-            <h1 className="mb-2 text-lg font-semibold text-slate-100">
+            <h1 className="mb-2 text-lg font-semibold text-content">
               页面出错了
             </h1>
-            <p className="mb-1 text-sm text-slate-400">
+            <p className="mb-1 text-sm text-muted">
               界面遇到未预期的错误,已停止渲染以避免更多问题。
+              后端与调查流程不受影响。
             </p>
-            <p className="mb-5 break-words text-xs text-slate-600">
+            <p className="mb-5 break-words font-mono text-2xs text-faint">
               {this.state.error.message}
             </p>
             <button
               onClick={this.handleReload}
-              className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent-muted px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent"
+              className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-fg transition-colors hover:bg-accent-strong"
             >
               <RotateCcw className="h-4 w-4" />
               重新加载

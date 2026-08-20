@@ -5,7 +5,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { AuthProvider } from './auth/context'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { initTheme } from './store/theme'
 import './index.css'
+
+// 在 React 挂载前应用主题:<html> 上先有正确的类,避免首帧闪白。
+initTheme()
 
 const queryClient = new QueryClient({
   defaultOptions: {

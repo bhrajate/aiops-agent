@@ -26,14 +26,24 @@ const EXPIRY_LEEWAY_MS = 5_000
 // setTimeout 单次可靠上限(约 24.8 天);超出则分段重排,避免溢出立即触发。
 const MAX_TIMER_MS = 2_147_483_647
 
-// 具备写权限(启动/取消调查、反馈/确认/关闭)的角色。viewer 只读。
+// 角色 → 能力的前端映射。**必须与 control-plane/internal/auth/claims.go
+// 的 rolePermissions 保持一致** —— 这里只是体验优化(隐藏点不动的按钮),
+// 后端仍然逐请求强制。放宽这里不会造成越权,但会让用户点了才看到 403。
 const WRITE_ROLES = ['oncall', 'sre', 'admin']
+// 审计与评测审核只给 sre/admin(审计跨命名空间且含被拒绝目标的 ID;
+// 批准评测用例决定发布质量门槛)。
+const AUDIT_ROLES = ['sre', 'admin']
+const REVIEW_ROLES = ['sre', 'admin']
 
 interface AuthContextValue {
   user: UserClaims | null
   isAuthenticated: boolean
   // 是否具备写操作权限(前端体验优化,后端仍强制)
   canWrite: boolean
+  // 读审计日志(sre/admin)
+  canReadAudit: boolean
+  // 审核评测用例(sre/admin)
+  canReviewGolden: boolean
   hasRole: (role: string) => boolean
   login: (username: string, password: string) => Promise<void>
   logout: () => void
@@ -137,6 +147,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       isAuthenticated: !!user,
       canWrite: roles.some((r) => WRITE_ROLES.includes(r)),
+      canReadAudit: roles.some((r) => AUDIT_ROLES.includes(r)),
+      canReviewGolden: roles.some((r) => REVIEW_ROLES.includes(r)),
       hasRole: (role: string) => roles.includes(role),
       login,
       logout,

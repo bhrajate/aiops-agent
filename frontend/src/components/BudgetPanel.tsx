@@ -1,12 +1,14 @@
 import type { Budget, Usage } from '@/api/types'
-import { ProgressBar } from './ui'
-import { formatCost, formatDuration } from '@/lib/format'
+import { ProgressBar, Callout } from './ui'
+import { formatCost, formatDuration, formatCount } from '@/lib/format'
+import { ShieldAlert } from 'lucide-react'
 
 interface Row {
   label: string
   used: number
   max: number
   render: (v: number) => string
+  hint?: string
 }
 
 function tone(ratio: number): 'accent' | 'warn' | 'danger' {
@@ -27,7 +29,7 @@ export function BudgetPanel({
       label: '耗时',
       used: usage.elapsed_sec,
       max: budget.max_duration_sec,
-      render: formatDuration,
+      render: (v) => formatDuration(v),
     },
     {
       label: '轮次',
@@ -39,7 +41,7 @@ export function BudgetPanel({
       label: 'Token',
       used: usage.tokens,
       max: budget.max_tokens,
-      render: (v) => v.toLocaleString('en-US'),
+      render: formatCount,
     },
     {
       label: '成本',
@@ -62,16 +64,27 @@ export function BudgetPanel({
         return (
           <div key={r.label}>
             <div className="mb-1 flex items-baseline justify-between text-xs">
-              <span className="text-slate-400">{r.label}</span>
-              <span className="font-mono text-slate-300">
+              <span className="text-muted">{r.label}</span>
+              <span className="tabular font-mono text-muted">
                 {r.render(r.used)}
-                <span className="text-slate-500"> / {r.render(r.max)}</span>
+                <span className="text-faint"> / {r.render(r.max)}</span>
               </span>
             </div>
             <ProgressBar value={r.used} max={r.max} tone={tone(ratio)} />
           </div>
         )
       })}
+
+      {/* 无实时证据支撑的结论被确定性降级的次数。>0 说明模型这轮声称已确认
+          但拿不出实时证据 —— 这是模型质量信号,不是系统错误,所以用提示条
+          而不是错误态。混在进度条里会看不见:它没有"上限"这个维度。 */}
+      {usage.ungrounded_downgrades != null &&
+        usage.ungrounded_downgrades > 0 && (
+          <Callout tone="warn" icon={<ShieldAlert className="h-3.5 w-3.5" />}>
+            有 {usage.ungrounded_downgrades} 条结论因缺少实时证据被自动降级。
+            模型声称已确认但拿不出证据,结论可信度应相应打折。
+          </Callout>
+        )}
     </div>
   )
 }

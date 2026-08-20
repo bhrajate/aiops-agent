@@ -24,6 +24,8 @@ export interface BlastRadius {
 
 export interface Incident {
   incident_id: string
+  tenant_id?: string
+  cluster_id?: string
   version: number
   grouping_key: string
   status: IncidentStatus
@@ -34,8 +36,14 @@ export interface Incident {
   blast_radius: BlastRadius
   topology_refs: string[]
   change_refs: string[]
+  signal_count?: number
   first_seen: string
   last_seen: string
+  resolved_at?: string | null
+  closed_at?: string | null
+  // 拓扑关联的 incident(疑似同源)。后端刻意不合并 incident 而是链接:
+  // 一条误判的拓扑边会把两次无关故障焊死,而拆分比合并难得多。
+  relations?: IncidentRelation[]
   // 详情响应中后端附带的调查引用(与 incident 平级,在 getIncident 中合并进来)
   current_investigation_id?: string
   investigation_ids?: string[]
@@ -91,6 +99,9 @@ export interface Usage {
   tokens: number
   cost_usd: number
   tool_calls: number
+  // 被确定性降级的"无实时证据支撑"结论数(evidence-first 不变量)。
+  // >0 表示模型声称已确认但拿不出实时证据 —— 模型质量信号。
+  ungrounded_downgrades?: number
 }
 
 export type EvidenceType =
@@ -176,20 +187,33 @@ export interface ToolCall {
 
 export interface Investigation {
   investigation_id: string
+  tenant_id?: string
   incident_id: string
   incident_version?: number
+  workflow_id?: string
+  run_id?: string
   phase: InvestigationPhase
   budget: Budget
   usage: Usage
+  trigger_reason?: string
+  triggered_by?: string
+  // 模型与策略版本:结论可复现的前提。出了错误诊断要能回答
+  // "当时用的哪个模型、哪版 prompt"。
+  model_version?: string
+  prompt_version?: string
+  policy_version?: string
+  // ⚠️ 时间字段是 started_at / ended_at,**不是** created_at / updated_at。
+  // 后端 model.Investigation 只有前者(见 control-plane/internal/model/model.go);
+  // 此前这里声明的是 created_at,读出来恒为 undefined —— 于是"开始于"显示为
+  // Invalid Date、耗时算成 NaN,而 NaN 在界面上渲染成空白,看不出是错的。
+  started_at: string
+  ended_at?: string | null
   // 以下为与 investigation 平级、在 getInvestigation 中合并进来的字段
   hypotheses?: Hypothesis[]
   diagnosis?: DiagnosisResult | null
   tool_calls?: ToolCall[]
   evidence?: Evidence[]
   feedback?: Feedback[]
-  trigger_reason?: string
-  created_at?: string
-  updated_at?: string
 }
 
 // SSE 事件(GET /v1/investigations/{id}/events)
@@ -201,8 +225,10 @@ export interface InvestigationEvent {
   ts?: string
 }
 
-// 人工反馈动作
-export type FeedbackAction = 'confirm' | 'correct' | 'close'
+// 人工反馈动作。
+// reject 与 correct 的区别:两者都表示结论错了,但只有 correct 给出了
+// 正确答案(标注真值)。后端只对 confirm/correct 提升评测用例。
+export type FeedbackAction = 'confirm' | 'correct' | 'reject' | 'close'
 
 export interface FeedbackRequest {
   author: string
@@ -245,6 +271,161 @@ export interface SignalRequest {
 
 export interface ApiError {
   error: { code: string; message: string }
+}
+
+// ── 值班总览(GET /v1/overview)────────────────────────────
+// 与 control-plane/internal/api/overview.go 的 overviewResponse 对齐。
+
+// {key, count} 通用形状。后端已定序(级别按 P1→P4,其余按计数降序),
+// 前端**不要再排序** —— 重排会让级别分布把 P4 放到最前。
+export interface CountPair {
+  key: string
+  count: number
+}
+
+export interface TrendBucket {
+  ts: string
+  new: number
+  resolved: number
+  investigations: number
+}
+
+export type QueueHealthStatus = 'ok' | 'lagging' | 'stuck'
+
+export interface QueueHealth {
+  outbox_pending: number
+  outbox_dead: number
+  oldest_pending_age_sec: number
+  dead_letters: number
+  health: QueueHealthStatus
+}
+
+export interface Overview {
+  window_hours: number
+  generated_at: string
+
+  // 未闭环现状(不受时间窗约束)
+  open_total: number
+  open_p1: number
+  open_p2: number
+  unacknowledged: number
+  active_investigations: number
+  stalled_investigations: number
+
+  by_severity: CountPair[]
+  by_status: CountPair[]
+  by_fault_category: CountPair[]
+  by_phase: CountPair[]
+  by_diagnosis: CountPair[]
+  by_evidence_type: CountPair[] | null
+  by_feedback: CountPair[] | null
+
+  incidents_in_window: number
+  investigations_started: number
+  signals_aggregated: number
+  cost_usd: number
+  tokens: number
+  tool_calls: number
+
+  // null 表示样本不足。不要显示成 0 —— 0 会被读成"秒级解决"。
+  mttr_seconds: number | null
+  mttr_sample_size: number
+  p95_investigation_seconds: number | null
+  investigation_sample_size: number
+
+  trend: TrendBucket[]
+
+  // null 表示查询失败或无权查看。同理不要显示成 0。
+  queue: QueueHealth | null
+  golden_pending: number
+}
+
+// ── 调查队列(GET /v1/investigations)──────────────────────
+// 列表行 = 调查本体 + 所属 incident 的展示字段(后端 JOIN 好)。
+export interface InvestigationListItem extends Investigation {
+  cluster_id: string
+  namespace?: string
+  incident_title?: string
+  incident_severity?: Severity
+  incident_status?: IncidentStatus
+  fault_category?: string
+  evidence_count: number
+  hypothesis_count: number
+}
+
+// ── 审计日志(GET /v1/audit)───────────────────────────────
+export type AuditResult = 'ok' | 'denied' | 'error' | 'allowed'
+
+export interface AuditEntry {
+  id: number
+  tenant_id: string
+  actor: string
+  action: string
+  target_type?: string
+  target_id?: string
+  scope?: Record<string, unknown>
+  result?: AuditResult
+  detail?: Record<string, unknown>
+  created_at: string
+}
+
+export interface AuditActionCount {
+  action: string
+  result: string
+  count: number
+}
+
+export interface AuditPage {
+  entries: AuditEntry[]
+  count: number
+  // 0 表示没有更多(游标翻页,不用 OFFSET:审计表持续写入,
+  // OFFSET 会在新记录插入时漏行,而这是问责依据)
+  next_cursor: number
+  action_counts: AuditActionCount[] | null
+}
+
+// ── 评测用例(GET /v1/golden-cases)────────────────────────
+export type ReviewStatus = 'pending' | 'approved' | 'rejected'
+
+export interface GoldenCase {
+  case_id: string
+  tenant_id: string
+  incident_id?: string
+  investigation_id?: string
+  fault_category: string
+  root_cause: string
+  affected_component?: string
+  expected_top_causes: string[]
+  signal_fixture?: Record<string, unknown>
+  review_status: ReviewStatus
+  source: string
+  promoted_by?: string
+  reviewed_by?: string
+  reviewed_at?: string
+  review_note?: string
+  created_at: string
+}
+
+// ── 知识库(GET /v1/knowledge)─────────────────────────────
+export interface KnowledgeItem {
+  knowledge_id: string
+  kind: string
+  title: string
+  content: string
+  applies_to?: Record<string, unknown>
+  version?: string
+  valid_until?: string
+  created_at?: string
+}
+
+// ── Incident 关联(getIncident 的 relations 平级字段)──────
+export interface IncidentRelation {
+  incident_id: string
+  related_incident_id: string
+  relation: 'upstream' | 'downstream'
+  via_edge?: Record<string, unknown>
+  confidence: number
+  created_at?: string
 }
 
 // ── 认证(SECURITY.md §1)────────────────────────────────
