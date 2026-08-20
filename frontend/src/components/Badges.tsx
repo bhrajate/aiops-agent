@@ -11,6 +11,7 @@ import type {
   QueueHealthStatus,
 } from '@/api/types'
 import { cn, evidenceTypeLabel } from '@/lib/format'
+import { isActivePhase as isActive, phaseLabel as label } from '@/lib/phase'
 
 interface PillProps {
   children: ReactNode
@@ -91,20 +92,6 @@ export function StatusBadge({ status }: { status: IncidentStatus }) {
   )
 }
 
-const PHASE_LABEL: Record<InvestigationPhase, string> = {
-  queued: '排队中',
-  triaging: '分诊中',
-  triage_published: '分诊已发布',
-  planning: '规划中',
-  collecting: '证据采集中',
-  synthesizing: '综合分析中',
-  concluded: '已得出结论',
-  needs_human: '需人工介入',
-  waiting_feedback: '等待反馈',
-  closed: '已关闭',
-  cancelled: '已取消',
-}
-
 const PHASE_STYLE: Record<InvestigationPhase, string> = {
   queued: 'bg-card-soft text-muted',
   triaging: 'bg-accent/15 text-accent',
@@ -119,24 +106,10 @@ const PHASE_STYLE: Record<InvestigationPhase, string> = {
   cancelled: 'bg-card-soft text-faint',
 }
 
-// 进行中的阶段(非终态)。与后端 overview.terminalPhases 对齐 ——
-// 两处漂移会让列表里的"进行中"筛选与总览的活跃计数对不上。
-const ACTIVE_PHASES: InvestigationPhase[] = [
-  'queued',
-  'triaging',
-  'planning',
-  'collecting',
-  'synthesizing',
-  'waiting_feedback',
-]
-
-export function isActivePhase(phase: InvestigationPhase): boolean {
-  return ACTIVE_PHASES.includes(phase)
-}
-
-export function phaseLabel(phase: InvestigationPhase): string {
-  return PHASE_LABEL[phase] ?? phase
-}
+// 阶段判定与中文名在 lib/phase.ts —— 那是纯逻辑且须与后端两处一致,
+// 单独成模块便于直接测试(见 lib/phase.test.ts)。这里只做转发,
+// 保持既有 import 路径可用。
+export { isActivePhase, isTerminalPhase, phaseLabel } from '@/lib/phase'
 
 export function PhaseBadge({
   phase,
@@ -146,7 +119,7 @@ export function PhaseBadge({
   // live:进行中的阶段加一个脉动点,让"还在跑"一眼可见。
   live?: boolean
 }) {
-  const showDot = live ?? isActivePhase(phase)
+  const showDot = live ?? isActive(phase)
   return (
     <Pill className={PHASE_STYLE[phase] ?? 'bg-card-soft text-muted'}>
       {showDot && (
@@ -155,7 +128,7 @@ export function PhaseBadge({
           aria-hidden
         />
       )}
-      {phaseLabel(phase)}
+      {label(phase)}
     </Pill>
   )
 }

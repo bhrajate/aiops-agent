@@ -35,12 +35,27 @@ function buildQuery(
   return s ? `?${s}` : ''
 }
 
-// 后端可能返回 { items: [...] } 或直接数组,做兼容
-function unwrapList<T>(data: unknown): T[] {
+// 后端可能返回 { items: [...] }、{ incidents: [...] } 或裸数组,做兼容。
+//
+// ⚠️ 兜底返回空数组是**已知的风险点**:响应形状对不上时界面显示"暂无数据",
+// 与"确实没有数据"无法区分。这里刻意保留兼容而不改成抛错,因为契约未强制
+// 包裹键名;但新增列表端点时务必把键名加进 KEYS,否则那个页面会永远空着
+// 且不报错。见 endpoints.test.ts 的断言。
+const LIST_KEYS = [
+  'items',
+  'incidents',
+  'investigations',
+  'golden_cases',
+  'entries',
+  'data',
+  'results',
+] as const
+
+export function unwrapList<T>(data: unknown): T[] {
   if (Array.isArray(data)) return data as T[]
   if (data && typeof data === 'object') {
     const obj = data as Record<string, unknown>
-    for (const key of ['items', 'incidents', 'data', 'results']) {
+    for (const key of LIST_KEYS) {
       if (Array.isArray(obj[key])) return obj[key] as T[]
     }
   }
