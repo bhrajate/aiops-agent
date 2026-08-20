@@ -21,7 +21,25 @@ func NewPublisher(brokers []string) *Publisher {
 			Addr:         kafka.TCP(brokers...),
 			Balancer:     &kafka.Hash{},
 			RequiredAcks: kafka.RequireAll, // 至少一次
-			BatchTimeout: 50 * time.Millisecond,
+			// BatchTimeout 是 kafka-go 等待"批次填满"的时长。
+			//
+			// 这里**每次 Publish 只发一条消息**(见下方 Publish),所以那个批次
+			// 永远不会被填满 —— BatchTimeout 因此是纯粹的附加延迟,每条消息都要
+			// 白等一个完整周期。
+			//
+			// 原值 50ms 让 outbox relay 的排空速率封顶在 ~20/s。实测(600 条
+			// pending,无 HTTP 竞争):50ms → 10 条/s;5ms → 56 条/s。
+			// 而 ingress 默认限流是 50/s/副本 —— 也就是说改之前**投递跟不上接收**,
+			// 持续告警风暴下 outbox 会无界增长。
+			//
+			// 那正是 store/queuestats.go 警告的那类静默失败:/v1/signals 照样返
+			// 202、signals 计数照涨,而 incidents 不再增长,所有既有信号都指示健康。
+			//
+			// 降到 5ms 不影响持久性(RequireAll 不变),只是让每次写更早发出。
+			// 进一步的优化是在调用侧批量发(一次 WriteMessages 传 N 条),
+			// 但那会改变逐条的错误归属 —— DrainOutbox 依赖它做 per-row 重试与
+			// dead 标记,所以没在这轮动。
+			BatchTimeout: 5 * time.Millisecond,
 		},
 	}
 }
