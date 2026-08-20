@@ -96,7 +96,7 @@
 |---|---|
 | **深度 RCA 的轮内适应** | 计划先定、采集期模型不参与,要追问需等下一轮。取舍换来可重放性与事前预算闸门;能力上界低于"自由追问式" RCA。改造方案(durable agent)已评估并**刻意否掉**,等一个"固定计划导致漏查"的生产案例再重启 —— 见 OPTIMIZATION-LOG 第九轮 |
 | **证据时间窗不可由模型指定** | 由 `incident.first_seen` 推导(前置 15 分钟基线,上限 24h) |
-| **租户隔离是进程级** | `tenant_id` 是"为未来多租户预留"(设计文档 §30),`Principal` 上没有租户字段,读路径不按它过滤。要行级隔离需先往 JWT claims 加租户 —— 那是认证模型变更,不是补丁 |
+| **租户隔离是进程级** | 设计范围是单租户(§6/§30),`tenant_id` 为未来预留,`Principal` 上没有租户字段,读路径不按它过滤。**现已有启动护栏**(`store.CheckSingleTenant`):库里出现其他租户的数据时,生产 fail-fast、非生产警告 —— 此前违反这个边界没有任何症状(ABAC 按 cluster/namespace 过滤拦不住同名 namespace,审计里每条都是"合法用户读了存在的 incident")。要真正做行级隔离需先往 JWT claims 加租户,那是认证模型变更,不是补丁 |
 
 生产验收的逐项落地状态见 [ACCEPTANCE.md](ACCEPTANCE.md);
 本轮各项改动的**背景与权衡理由**见 [OPTIMIZATION-LOG.md](OPTIMIZATION-LOG.md)。

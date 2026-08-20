@@ -142,7 +142,7 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-frontend-e2e.sh` | 7/7(真实 Chromium 渲染,需先 `npm run e2e:install`) |
 | `check-workflow-timeouts.sh` | 14/0 |
 | `check-slo-burnrate.sh` | 17/17(自带起 Prometheus + exporter 容器) |
-| `go test ./internal/store/ -run DB` | 28 PASS |
+| `go test ./internal/store/ -run DB` | 32 PASS(含单租户护栏 4 项) |
 
 全部 23 项都跑过,无遗漏。
 
