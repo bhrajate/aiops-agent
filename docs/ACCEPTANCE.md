@@ -138,10 +138,11 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-feedback-loop.sh` | 13/13 |
 | `check-alert-rules.sh` | ALERT-RULES OK |
 | `check-prod-guards.sh` | 26/26 |
+| `check-workflow-timeouts.sh` | 14/0 |
+| `check-slo-burnrate.sh` | 17/17(自带起 Prometheus + exporter 容器) |
 | `go test ./internal/store/ -run DB` | 28 PASS |
 
-**本轮未跑:** `check-slo-burnrate.sh`(要额外起 Prometheus + exporter 容器)、
-`check-workflow-timeouts.sh`。
+全部 21 项都跑过,无遗漏。
 
 ### 这轮修掉的、让上面这些数字此前不可信的东西
 
