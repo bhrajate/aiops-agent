@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aiops/cluster-agent/internal/datasource"
+	"github.com/aiops/cluster-agent/internal/eventwatch"
 	"github.com/aiops/cluster-agent/internal/server"
 	"github.com/aiops/cluster-agent/internal/tools"
 )
@@ -38,6 +39,28 @@ func main() {
 	}
 	reg := tools.NewRegistry(ds)
 	srv := server.New(clusterID, reg, log)
+
+	// K8s Event watch(可选,默认关闭)。补的是能力边界里那条
+	// "仅 pull —— 无主动上报、无 Event watch:瞬时事件超出查询时间窗或被 K8s
+	// 回收即不可得"。没有告警规则覆盖的故障此前根本不会被看见。
+	//
+	// 配置错误在这里 **fail-fast**:mock 数据源会合成假 signal,而假 signal 会
+	// 创建真 incident 并可能拉起自动调查 —— 值班人员会去排查一个不存在的故障。
+	// 这比假 evidence 严重(后者只污染一次调查的结论)。
+	var watcher *eventwatch.Watcher
+	if eventwatch.Enabled() {
+		ewCfg, err := eventwatch.ConfigFromEnv(clusterID, mode)
+		if err != nil {
+			log.Error("invalid event watch configuration", "err", err)
+			os.Exit(1)
+		}
+		kc, err := datasource.KubeClient(ds)
+		if err != nil {
+			log.Error("event watch 需要可用的 Kubernetes 客户端", "err", err)
+			os.Exit(1)
+		}
+		watcher = eventwatch.New(kc, ewCfg, log)
+	}
 
 	tlsCfg, err := server.TLSConfigFromEnv().Build()
 	if err != nil {
@@ -95,6 +118,14 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// 独立 goroutine 跑 watch。Run 内部 recover 且永不返回 error ——
+	// event watch 的任何问题都不该影响 :9100 上的只读工具,那是 agent 的主职责
+	// ("失败只降级、不影响既有路径")。
+	if watcher != nil {
+		go watcher.Run(ctx)
+	}
+
 	<-ctx.Done()
 
 	log.Info("cluster-agent shutting down")
