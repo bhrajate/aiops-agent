@@ -99,6 +99,10 @@ echo "=== 指标抓取 ==="
 curl -s localhost:8090/metrics | grep -E "aiops_(signals|tool|investigations)" | grep -v "^#" | head
 
 echo "=== 审计(含认证身份 alice)==="
-dbq "select actor||' | '||action||' | '||coalesce(result,'-')||' | '||count(*) from audit_log group by 1,2,3 order by 2;" | head -20
+# 拼成单列输出(dbq 走 -tAc,多列会带 | 分隔符)。
+# group/order 必须用列名而非序号 —— 拼接后 select 列表只有 1 列,
+# 沿用 `group by 1,2,3 order by 2` 会报 "ORDER BY position 2 is not in select list"。
+dbq "select actor||' | '||action||' | '||coalesce(result,'-')||' | '||count(*)
+       from audit_log group by actor, action, result order by action;" | head -20
 
 echo ""; echo "=== PROD E2E DONE ==="
