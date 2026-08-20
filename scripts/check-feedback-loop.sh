@@ -60,39 +60,10 @@ AIOPS_AUTH_MODE=hs256 AIOPS_AUTH_HS256_SECRET=dev-secret \
 AIOPS_INTERNAL_TOKEN=$TOKEN AIOPS_RETENTION_ENABLED=false \
 /tmp/cp-fl >"$LOG" 2>&1 &
 CP_PID=$!
-# clean_ns 按 namespace 清掉本脚本造的数据。
-#
-# 必须**先删 investigations 及其从表**再删 incidents:investigations 上有
-# investigations_incident_id_fkey 外键。此前这里直接删 incidents,于是
-# 有调查的 incident 删不掉 —— 而那条报错被 `2>/dev/null` 吞了,
-# 脚本接着拿上一次的 payment incident 做断言(correlation 会合并到旧 incident,
-# 从而拿到一个没有本次反馈的 investigation,正是本文件注释里担心的情形)。
-clean_ns() {
-  local ns="$1"
-  dbx "DELETE FROM golden_cases WHERE incident_id IN
-         (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${ns}');
-       DELETE FROM human_feedback WHERE investigation_id IN
-         (SELECT investigation_id FROM investigations WHERE incident_id IN
-            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${ns}'));
-       DELETE FROM investigation_events WHERE investigation_id IN
-         (SELECT investigation_id FROM investigations WHERE incident_id IN
-            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${ns}'));
-       DELETE FROM hypotheses WHERE investigation_id IN
-         (SELECT investigation_id FROM investigations WHERE incident_id IN
-            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${ns}'));
-       DELETE FROM evidence WHERE investigation_id IN
-         (SELECT investigation_id FROM investigations WHERE incident_id IN
-            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${ns}'));
-       DELETE FROM investigations WHERE incident_id IN
-         (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${ns}');
-       DELETE FROM signals WHERE labels->>'namespace' = '${ns}';
-       DELETE FROM alert_groups WHERE namespace = '${ns}';
-       DELETE FROM incidents WHERE correlation_key LIKE '%|${ns}';"
-}
 
 cleanup(){
   kill $CP_PID 2>/dev/null; wait $CP_PID 2>/dev/null
-  clean_ns "$NS"
+  db_purge_ns "$NS"
 }
 trap cleanup EXIT
 
@@ -106,7 +77,7 @@ done
 
 # 前置清库:NS 固定为 payment,历史数据会让 correlation 合并到旧 incident,
 # 从而拿到一个没有本次反馈的 investigation。
-clean_ns "$NS"
+db_purge_ns "$NS"
 
 info "造 P1 incident 并拿到 investigation"
 curl -s -o /dev/null --max-time 6 -X POST "http://127.0.0.1:$PUB/v1/signals" \

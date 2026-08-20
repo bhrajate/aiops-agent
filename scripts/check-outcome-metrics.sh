@@ -60,9 +60,7 @@ AIOPS_INTERNAL_TOKEN=$TOKEN AIOPS_RETENTION_ENABLED=false \
 CP_PID=$!
 cleanup(){
   kill $CP_PID 2>/dev/null; wait $CP_PID 2>/dev/null
-  qx "DELETE FROM signals WHERE labels->>'namespace' LIKE 'f10-%';
-      DELETE FROM alert_groups WHERE namespace LIKE 'f10-%';
-      DELETE FROM incidents WHERE correlation_key LIKE '%|f10-%';"
+  db_purge_ns 'f10-%'
 }
 trap cleanup EXIT
 

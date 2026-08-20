@@ -130,6 +130,40 @@ db_start() {
   esac
 }
 
+# db_purge_ns 按 namespace 的 LIKE 模式清掉脚本造的数据。
+#
+# 参数是**LIKE 模式**,所以精确("f7-abc")和通配("f7-%")都能用。
+#
+# 存在的原因是外键顺序:investigations 上有 investigations_incident_id_fkey,
+# 各脚本此前直接 `DELETE FROM incidents`,于是**有调查的 incident 删不掉**。
+# 那条报错被 `2>/dev/null` 吞掉后,数据留在库里,下一次运行的 correlation
+# 会合并到旧 incident —— 断言于是对着上一次的数据打分。
+#
+# 抽到这里而不是各脚本各写一份:删除顺序是个容易写错且错了不报错的东西
+# (漏一张从表就撞外键,而撞了也只是静默留数据)。一份实现,四个脚本共用。
+db_purge_ns() {
+  local like="$1"
+  dbx "DELETE FROM golden_cases WHERE incident_id IN
+         (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${like}');
+       DELETE FROM human_feedback WHERE investigation_id IN
+         (SELECT investigation_id FROM investigations WHERE incident_id IN
+            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${like}'));
+       DELETE FROM investigation_events WHERE investigation_id IN
+         (SELECT investigation_id FROM investigations WHERE incident_id IN
+            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${like}'));
+       DELETE FROM hypotheses WHERE investigation_id IN
+         (SELECT investigation_id FROM investigations WHERE incident_id IN
+            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${like}'));
+       DELETE FROM evidence WHERE investigation_id IN
+         (SELECT investigation_id FROM investigations WHERE incident_id IN
+            (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${like}'));
+       DELETE FROM investigations WHERE incident_id IN
+         (SELECT incident_id FROM incidents WHERE correlation_key LIKE '%|${like}');
+       DELETE FROM signals WHERE labels->>'namespace' LIKE '${like}';
+       DELETE FROM alert_groups WHERE namespace LIKE '${like}';
+       DELETE FROM incidents WHERE correlation_key LIKE '%|${like}';"
+}
+
 # db_ready 判断库是否已可接受连接。停库后等待恢复时用。
 # 跟着 _DB_MODE 走,理由同 db_stop:硬编码 compose 的 pg_isready 在库不是
 # compose 起的时候永远失败,于是调用方白等完超时再继续,

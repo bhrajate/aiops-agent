@@ -66,8 +66,7 @@ q(){ dbq "$1"; }
 # 造出**带 label 的** gauge:它们只在有行时才存在,不造就会被误判为"不存在"。
 q "DELETE FROM outbox WHERE topic LIKE 'ar-%'; DELETE FROM dead_letters WHERE topic LIKE 'ar-%';"
 # 顺带清理历史运行留下的 archk-* 命名空间数据,避免无界堆积。
-q "DELETE FROM alert_groups WHERE namespace LIKE 'archk-%';
-   DELETE FROM incidents WHERE correlation_key LIKE '%|archk-%';"
+db_purge_ns 'archk-%'
 q "INSERT INTO outbox (topic,key,payload,status) VALUES ('ar-t','k','{}','pending');"
 q "INSERT INTO dead_letters (topic,key,payload,error,attempts) VALUES ('ar-t','k','{}','x',5);"
 
@@ -83,8 +82,7 @@ CP_PID=$!
 cleanup(){
   kill $CP_PID 2>/dev/null; wait $CP_PID 2>/dev/null
   q "DELETE FROM outbox WHERE topic LIKE 'ar-%'; DELETE FROM dead_letters WHERE topic LIKE 'ar-%';"
-  q "DELETE FROM alert_groups WHERE namespace='$NS';
-     DELETE FROM incidents WHERE correlation_key LIKE '%|$NS';"
+  db_purge_ns "$NS"
 }
 trap cleanup EXIT
 

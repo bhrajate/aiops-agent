@@ -57,9 +57,7 @@ AIOPS_INTERNAL_TOKEN=dev-token AIOPS_RETENTION_ENABLED=false \
 CP_PID=$!
 cleanup(){
   kill $CP_PID 2>/dev/null; wait $CP_PID 2>/dev/null
-  qx "DELETE FROM signals WHERE labels->>'namespace' = '$NS';
-      DELETE FROM alert_groups WHERE namespace = '$NS';
-      DELETE FROM incidents WHERE correlation_key LIKE '%|$NS';"
+  db_purge_ns "$NS"
 }
 trap cleanup EXIT
 
