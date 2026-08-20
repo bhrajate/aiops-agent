@@ -27,7 +27,7 @@ Signal
 | `control-plane/` | 基础设施控制平面 | Go | Signal Ingress、Incident Manager、Trigger Policy、API + Workbench 后端、Tool Gateway(逻辑分层清晰,当前为单体进程部署) |
 | `ai-worker/` | AI 推理平面 | Python | Temporal RCA Worker:Investigation Workflow、Planner、Analyzers、Synthesizer、Model Gateway、Knowledge Service |
 | `cluster-agent/` | 集群数据平面 | Go | 每集群只读 Agent(pull 模式),暴露类型化只读工具 |
-| `frontend/` | 产品 | React + TS + Vite | Incident-first 的 Incident Workbench |
+| `frontend/` | 产品 | React + TS + Vite | Incident-first 的值班台:总览 / 告警 / 调查 / 评测集 / 知识库 / 审计 |
 | `deploy/` | 部署 | docker-compose | PostgreSQL+pgvector / Temporal / Redpanda / MinIO / Redis |
 | `docs/` | 文档 | Markdown | 架构映射、运行手册、API 说明 |
 

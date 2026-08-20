@@ -58,20 +58,102 @@ POST /internal/investigations/{id}/usage       { "usage": {...} }
 ## 公共 API(control-plane `:8088`)—— 前端消费
 
 ```
-POST /v1/signals                                 # Signal Ingress,快速 2xx
+POST /v1/auth/login                              # 仅 hs256 开发模式;生产用 IdP
+GET  /v1/auth/me
+POST /v1/signals                                 # Signal Ingress,快速 2xx(webhook HMAC 鉴权)
+GET  /v1/overview?hours=24                        # 值班首屏聚合(见下)
 GET  /v1/incidents?status=&severity=&limit=
-GET  /v1/incidents/{incident_id}
+GET  /v1/incidents/{incident_id}                  # 附带 investigations / alert_groups / relations
 POST /v1/incidents/{incident_id}/investigations  # Header: Idempotency-Key
+POST /v1/incidents/{incident_id}/status           # { status: acknowledged | resolved }
+GET  /v1/investigations?phase=&active=&limit=     # 跨 incident 的调查队列
 GET  /v1/investigations/{investigation_id}
 GET  /v1/investigations/{investigation_id}/events   # SSE (text/event-stream)
 POST /v1/investigations/{investigation_id}/cancel
 POST /v1/investigations/{investigation_id}/feedback # { author, action, confirmed_root_cause?, comment? }
 GET  /v1/evidence/{evidence_id}
-GET  /v1/knowledge?q=                             # 知识库检索(可选)
-GET  /healthz
+GET  /v1/knowledge?q=                             # 知识库检索(与 Agent 做 RAG 同一入口)
+GET  /v1/golden-cases?status=pending&limit=       # 待审评测用例(sre/admin)
+POST /v1/golden-cases/{case_id}/review            # { status: approved|rejected, note? }
+GET  /v1/audit?actor=&action=&result=&hours=&limit=&before_id=   # 审计日志(sre/admin)
+GET  /healthz                                     # liveness,恒 200
+GET  /readyz                                      # readiness,DB 不可用返 503
 ```
 
 统一响应错误体:`{ "error": { "code":"...", "message":"..." } }`。
+
+### RBAC 与端点的对应
+
+有效权限 = 用户 ∩ Agent 服务身份 ∩ Incident 范围(详见 `docs/SECURITY.md`)。
+
+| 动作 | viewer | oncall | sre | admin | 端点 |
+|---|---|---|---|---|---|
+| `read_incident` / `read_evidence` | ✓ | ✓ | ✓ | ✓ | incidents / investigations / evidence / overview |
+| `start_investigation` / `cancel_investigation` / `feedback` | | ✓ | ✓ | ✓ | investigations / cancel / feedback |
+| `update_incident` | | ✓ | ✓ | ✓ | `POST /v1/incidents/{id}/status` |
+| `review_golden_case` | | | ✓ | ✓ | golden-cases |
+| `read_audit` | | | ✓ | ✓ | `GET /v1/audit`、overview 的 `queue` 字段 |
+
+`update_incident` 给 oncall 起:认领是值班动作的起点,"这个我在看了"必须能被别人看到,
+否则同一个 P1 会有三个人同时开始排查。viewer 不给 —— 只读角色改状态会让"谁在负责"
+这个信息失真,而值班交接完全依赖它。
+
+`read_audit` 只给 sre/admin:审计日志跨 incident、跨命名空间,且含**被拒绝访问**的
+目标 ID 与 scope,那本身是敏感信息(能推断出存在哪些资源)。ABAC 在这里无法逐行过滤
+(记录的是"谁试图访问什么",不都挂在 incident 上),所以用 RBAC 收紧到少数人,
+而不是给一个过滤不干净的接口。
+
+### `GET /v1/overview` 的口径
+
+一个请求返回整块首屏。**刻意不拆成八个端点**:首屏若并发八个请求,任意一个失败会让
+页面呈现*部分真实*的状态 —— "P1: 2"是真的但"进行中调查: 0"是加载失败的默认值,
+而值班人员没法分辨哪个数字是坏的。一个端点要么整块成功要么整块报错。
+
+聚合口径与 `GET /v1/incidents` **严格一致**:ABAC 逐行过滤后累加,共用
+`auth.EffectiveAccess`。两处不一致会让总览说有 3 个 P1、点进列表只有 1 个,
+这种矛盾一旦出现,面板就再不会被信任。也因此不能让前端拿 incident 列表现算:
+列表有 limit(默认 50、上限 500),算出来的是"最近 50 条里的 P1 数"。
+
+几个字段的语义值得写明:
+
+- `open_total` / `open_p1` / `open_p2` / `unacknowledged` **不受 `hours` 约束**。
+  一个三天前爆发、至今没人处理的 P1 必须出现在值班总览上 —— 按 24h 窗口过滤掉它,
+  恰好隐藏了最该被看见的那类故障。窗口只约束分布、趋势与耗时统计。
+- `mttr_seconds` / `p95_investigation_seconds` 样本不足时为 **`null`**,不是 0。
+  0 会被读成"秒级解决",而真相是"没有已解决的样本"。前端须显示破折号。
+  伴随的 `*_sample_size` 给出样本量。
+- `stalled_investigations` 用**挂钟时间**判定(启动至今 > 10 分钟且仍非终态),
+  不用 `usage.elapsed_sec` —— 后者由 worker 上报,worker 挂了它就不再更新,
+  而那正是要检测的情况。
+- `queue` 为 **`null`** 表示查询失败或调用方无 `read_audit` 权限。
+  **绝不填 0**:0 会被读成"队列是空的",恰好掩盖 outbox 卡死这类静默失败。
+  `queue.health` 按最老待投递记录的**年龄**判定(lagging ≥60s、stuck ≥300s 或有
+  `status='dead'`),不按条数:告警风暴下积压几千条但几秒排空是正常的,只积压 3 条
+  却卡了 20 分钟才是故障。按条数判定会在风暴时误报、在真卡住时漏报。
+- `by_severity` 按 P1→P4 定序,其余分布按计数降序、同数按键名。**前端不要再排序**
+  —— 计数序会把 P4 排在 P1 前面,而值班台第一眼要看的是有没有 P1。
+- `by_feedback` 按动作分维度返回,**不折算成采纳率**:比率会丢掉分子分母,而
+  "低采纳率"与"根本没人给反馈"是完全不同的问题,处置方式相反。
+
+### `POST /v1/incidents/{id}/status` 的约束
+
+只接受 `acknowledged` 与 `resolved`:
+
+- `open` 是 Signal 写入的初始态,不允许人工退回 —— 会让 `first_seen` 与状态历史矛盾,
+  而值班交接依赖它。
+- `closed` 走调查反馈的 `close` 动作。关闭意味着"这次调查的结论我认了",必须与反馈
+  一起记录,否则评测集拿不到标注真值。
+- 已 `closed` 的 incident 拒绝变更(409)。重新打开应当是一次新的 Signal 聚合
+  (它会带新的 `first_seen`),而不是把旧记录改回去。
+- 目标态与当前态相同时**幂等返回** `{changed:false}` 而非 409:两个值班人员同时点
+  "认领"是常态,第二个人看到 409 会以为自己操作失败。
+
+### `GET /v1/audit` 的翻页
+
+用 `before_id` 游标而非 OFFSET:审计表持续写入,OFFSET 翻页会在新记录插入时漏行或
+重复行,而这是问责依据,不能有"翻页时少了一条"。响应的 `next_cursor` 为 0 表示没有
+更多;`action_counts` 按 `(action, result)` 聚合,`denied` 单独可见才有意义 ——
+"有 40 次权限拒绝"是安全信号,混在 action 总数里就看不见了。
 
 ## Cluster Agent 工具协议(gateway `:8090` → agent `:9100`)
 
