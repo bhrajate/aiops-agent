@@ -50,6 +50,12 @@ func (s *Store) IncidentStatRows(ctx context.Context, sinceHours int) ([]Inciden
 		   FROM incidents
 		  WHERE last_seen >= now() - make_interval(hours => $1)
 		     OR status IN ('open','acknowledged')
+		     -- 第三个条件不是冗余的:SetIncidentStatus 写 resolved_at/closed_at 时
+		     -- **不动 last_seen**。于是"信号早就停了、人过了很久才去解决"的长尾故障
+		     -- 前两个条件都不满足 —— 它从 MTTR 样本与趋势的 resolved 序列里消失,
+		     -- 不报错也不记日志,读起来只是"我们解决得很快"。
+		     -- 而 MTTR 存在的意义恰恰是度量长尾。见 stats_db_test.go。
+		     OR COALESCE(resolved_at, closed_at) >= now() - make_interval(hours => $1)
 		  ORDER BY last_seen DESC
 		  LIMIT 5000`, sinceHours)
 	if err != nil {

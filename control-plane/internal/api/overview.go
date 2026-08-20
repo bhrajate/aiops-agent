@@ -205,7 +205,7 @@ func (a *PublicAPI) getOverview(w http.ResponseWriter, r *http.Request) {
 			out.ActiveInvestigat++
 			// 卡住:活跃且已运行超过预算上限。用挂钟时间而不是 usage.elapsed_sec ——
 			// 后者由 worker 上报,worker 挂了它就不再更新,而那正是要检测的情况。
-			if now.Sub(row.StartedAt) > stallThreshold(row.ElapsedSec) {
+			if now.Sub(row.StartedAt) > stallThreshold {
 				out.StalledInvestigations++
 			}
 		}
@@ -274,13 +274,20 @@ func resolutionTime(row store.IncidentStatRow) *time.Time {
 	return row.ClosedAt
 }
 
-// stallThreshold 给出"这次调查跑太久了"的判定线。
+// stallThreshold 是"这次调查跑太久了"的判定线,**刻意是个常量**。
 //
-// 预算默认 300s(model.DefaultBudget)。这里取 2 倍并设 10 分钟下限:
+// 默认预算是 300s(model.DefaultBudget),这里取 2 倍并向上取到 10 分钟:
 // 判定太紧会把正常的长调查标成卡住,而误报几次之后没人再看这个数字。
-func stallThreshold(_ float64) time.Duration {
-	return 10 * time.Minute
-}
+//
+// 为什么不按每次调查自己的 budget.max_duration_sec 算:这条线在三处出现
+// (本函数、前端 lib/phase.ts 的 STALL_MS、frontend/README 的说明),
+// 改成按调查动态取值就必须让前端也能拿到每行的 budget 并复刻同一套算法。
+// 那是"两处实现同一个判定"的经典漂移源 —— 而漂移的表现是总览说 3 个卡住、
+// 列表标出 5 个,没有任何报错。常量换来的是三处可以用同一个数字对齐。
+//
+// 要改成动态,得先把判定挪到后端**唯一**产出(比如在 InvestigationListItem 上
+// 加一个 stalled 布尔字段),让前端只渲染不计算。
+const stallThreshold = 10 * time.Minute
 
 var severityOrder = []string{"P1", "P2", "P3", "P4"}
 

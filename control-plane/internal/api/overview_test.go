@@ -194,6 +194,37 @@ func TestBuildTrendKeepsJustNowInLastBucket(t *testing.T) {
 	}
 }
 
+// IncidentStatRows 现在会额外返回"窗口内被解决但 last_seen 在窗口外"的行
+// (修 MTTR 静默漏样本)。这些行进入同一个循环,必须**只**贡献 resolved,
+// 不能把 new 也算上 —— 否则趋势图会在故障被解决的那一刻同时画出一个新增峰,
+// 看起来像"解决的同时又爆了一个",而实际上是同一个故障。
+func TestBuildTrendLateResolvedCountsResolvedNotNew(t *testing.T) {
+	p, scope := trendPrincipal()
+	now := time.Now()
+	start := now.Add(-1 * time.Hour) // 1 小时窗口
+	resolved := now.Add(-10 * time.Minute)
+	rows := []store.IncidentStatRow{{
+		ClusterID:  "c1",
+		Status:     "resolved",
+		FirstSeen:  now.Add(-3 * time.Hour),        // 窗口外
+		LastSeen:   now.Add(-150 * time.Minute),    // 窗口外
+		ResolvedAt: &resolved,                      // 窗口内
+	}}
+
+	got := buildTrend(rows, nil, p, scope, start, now, 1)
+	var newSum, resSum int
+	for _, b := range got {
+		newSum += b.New
+		resSum += b.Resolved
+	}
+	if newSum != 0 {
+		t.Errorf("new 合计 = %d, want 0 —— first_seen 在窗口外不该计入新增", newSum)
+	}
+	if resSum != 1 {
+		t.Errorf("resolved 合计 = %d, want 1 —— 窗口内的解决动作必须出现在趋势里", resSum)
+	}
+}
+
 func TestBuildTrendDropsOutOfScope(t *testing.T) {
 	// ABAC 必须在趋势里同样生效:否则曲线的量级会超过用户在列表里能看到的数量,
 	// 两个视图对不上。
