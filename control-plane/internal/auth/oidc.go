@@ -174,11 +174,8 @@ func (v *JWKSVerifier) Verify(ctx context.Context, raw string) (Principal, error
 	if err != nil {
 		return Principal{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
 	}
-	return Principal{
-		Subject:    claims.Subject,
-		Email:      claims.Email,
-		Roles:      claims.Roles,
-		Clusters:   claims.Clusters,
-		Namespaces: claims.Namespaces,
-	}, nil
+	// 归一化 claim 的两处来源(顶层 vs Keycloak 的 realm_access)。
+	// 见 jwt.go 的 customClaims 注释:只读顶层会让真实 IdP 的 token
+	// 校验通过但 Principal 三个字段全空 —— 每个请求都 403。
+	return claims.principal(), nil
 }

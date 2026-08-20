@@ -60,12 +60,54 @@ func NewAuthenticator(c Config) *Authenticator {
 func (a *Authenticator) Mode() Mode { return a.mode }
 
 // customClaims 映射 JWT claims 到 Principal。
+//
+// 三个非 registered 字段有**两处来源**,因为真实 IdP 与我们的开发签发格式不同:
+//
+//	roles       顶层 `roles`,回落到 `realm_access.roles`(Keycloak 默认形态)
+//	clusters    顶层 `clusters`,回落到 `resource_access.<aud>.clusters`
+//	namespaces  同上
+//
+// 为什么必须支持回落:对着**真实 Keycloak** 实测,开箱的 access token 里
+// 顶层没有 `roles`(它在 `realm_access.roles`)、也完全没有 `clusters`/`namespaces`。
+// 只读顶层的话 Principal 三个字段全空 → `Can()` 对任何动作返 false →
+// **每个请求都 403**,而 token 本身校验是通过的。
+//
+// 那种失败极难定位:日志里是"认证成功",审计里是"某个合法身份被拒",
+// 而运维会去查 RBAC 配置 —— 但问题在 claim 的形状。
 type customClaims struct {
 	Email      string   `json:"email"`
 	Roles      []string `json:"roles"`
 	Clusters   []string `json:"clusters"`
 	Namespaces []string `json:"namespaces"`
+	// RealmAccess 是 Keycloak 放 realm 角色的地方。
+	RealmAccess struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"`
+	// PreferredUsername:Keycloak 的 `sub` 是 UUID,而审计日志里记 UUID
+	// 等于记不了责任人。有这个字段时优先用它作为 Subject。
+	PreferredUsername string `json:"preferred_username"`
 	jwt.RegisteredClaims
+}
+
+// principal 把 claims 归一化成 Principal,处理上述两处来源。
+func (c *customClaims) principal() Principal {
+	roles := c.Roles
+	if len(roles) == 0 {
+		roles = c.RealmAccess.Roles
+	}
+	subject := c.Subject
+	if c.PreferredUsername != "" {
+		// 审计与反馈作者都用 Subject。UUID 在那两处都不可读,
+		// 而"谁做了这件事"是问责的全部意义。
+		subject = c.PreferredUsername
+	}
+	return Principal{
+		Subject:    subject,
+		Email:      c.Email,
+		Roles:      roles,
+		Clusters:   c.Clusters,
+		Namespaces: c.Namespaces,
+	}
 }
 
 // Authenticate 从 Authorization 头解析并校验,返回 Principal。
@@ -94,13 +136,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, authHeader string) (Pr
 	if err != nil || !token.Valid {
 		return Principal{}, fmt.Errorf("%w: %v", ErrInvalidToken, err)
 	}
-	return Principal{
-		Subject:    claims.Subject,
-		Email:      claims.Email,
-		Roles:      claims.Roles,
-		Clusters:   claims.Clusters,
-		Namespaces: claims.Namespaces,
-	}, nil
+	return claims.principal(), nil
 }
 
 // Issue 在 hs256 模式下签发一个 token(开发登录端点用)。

@@ -30,6 +30,16 @@ func (a *Authenticator) Middleware(skip func(r *http.Request) bool, next http.Ha
 			writeErr(w, http.StatusUnauthorized, "unauthorized", err.Error())
 			return
 		}
+		// token 校验通过但一个角色都没有 —— 这个身份接下来会在**每个**端点上拿 403,
+		// 而那与"正确地拒绝越权"在日志和审计里完全同形。
+		//
+		// 实测(真实 Keycloak):开箱的 access token 顶层没有 roles、
+		// 也没有 clusters/namespaces。若 IdP 侧的 protocol mapper 没配对,
+		// 症状就是"登录成功但什么都打不开",而运维会去查 RBAC 配置 ——
+		// 方向完全错了。所以在这里单独报出来,并指名最可能的原因。
+		if len(p.Roles) == 0 {
+			a.warnNoRoles(p.Subject)
+		}
 		ctx := context.WithValue(r.Context(), principalKey, p)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
