@@ -84,6 +84,10 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      # 单元测试守的是"错了也看起来正常"的那批纯函数:样本不足时显示破折号
+      # 而非 0、阶段终态集合与后端不漂移、列表包裹键不漏。这些缺陷不会让
+      # 构建失败,只会让界面显示一个看起来合理的错数字。
+      - run: npm test
       - run: npm run build
 
   # ---------------------------------------------------------------- 安全扫描

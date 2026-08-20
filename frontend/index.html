@@ -1,10 +1,16 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AIOps Incident Workbench</title>
+    <!-- 首帧背景色:与 :root.dark 的 --bg 一致。
+         html 上预置 class="dark" 是为了避免首屏闪白 —— store/theme.ts 会在
+         React 挂载前把真实偏好写上去(可能改成 light),但在那之前浏览器已经
+         用这个值刷过第一帧。深色是值班台的默认场景,故取深色。 -->
+    <meta name="theme-color" content="#090c12" />
+    <meta name="description" content="AIOps 值班台 —— Incident 驱动、证据优先、默认只读的 Kubernetes 根因分析平台" />
+    <title>AIOps 值班台</title>
   </head>
   <body>
     <div id="root"></div>

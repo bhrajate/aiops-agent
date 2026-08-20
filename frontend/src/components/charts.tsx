@@ -97,7 +97,10 @@ export function TrendChart({
   buckets: TrendBucket[]
   height?: number
 }) {
-  const gradId = useId()
+  // useId 返回形如 ":R0:" 的串。浏览器能把 url(#:R0:) 当 URI 片段解析,
+  // 但冒号让它无法用 querySelector('#...') 选中(需转义),排查时很别扭。
+  // 去掉冒号成本为零,顺手做掉。
+  const gradId = `grad-${useId().replace(/:/g, '')}`
   const [hover, setHover] = useState<number | null>(null)
 
   const { paths, max, w, h } = useMemo(() => {

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- 值班台图标:脉搏线。与侧边栏的 Activity 图标同形,
+       让标签页与界面是同一个东西。深色底保证在浅色/深色浏览器标签栏下都可辨。 -->
+  <rect width="32" height="32" rx="7" fill="#0f1620"/>
+  <path d="M5 16.5h4.2l2.6-7 3.6 13 3.2-8.4 2.1 4.2H27"
+        stroke="#38bdf8" stroke-width="2.4" stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>
