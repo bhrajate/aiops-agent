@@ -113,6 +113,59 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-prod-guards.sh` | 生产护栏**真的生效**:渲染后的清单必须显式声明 `AIOPS_ENV`/`AIOPS_DATASOURCE`;渲染结果喂给 `validate-config` 必须通过(否则生产起不来);反向逐项抽掉必需项必须被拒(证明护栏不空转);cluster-agent 与 ai-worker 在生产拒绝 mock | 24/24 |
 | `go test ./internal/store/ -run DB` | 保留清理两条安全不变量(活跃/在跑不删,F4) | 8/8 |
 
+## 2026-08-20 全量复跑结果
+
+在**本机 5432 被其他项目占用**的环境下跑的(独立 pg/redpanda/temporal 容器 +
+`AIOPS_PG_CONTAINER`)—— 也就是修复前整套跑不起来的环境。
+
+| 脚本 | 结果 |
+|---|---|
+| `prod-e2e.sh` | exit=0,"PROD E2E DONE";evidence 12 |
+| `check-auth.sh` | 14/14 |
+| `check-two-tier.sh` | 16/16 |
+| `check-correlation-window.sh` | 6/6 |
+| `check-blast.sh` | PASS,四维齐备 `{"groups":2,"services":2,"resources":2,"namespaces":1}` |
+| `check-orphan-reconcile.sh` | 4/4 **(需要 Temporal 在跑;缺它时 3 条必失败)** |
+| `check-roles.sh` | 11/11 |
+| `check-ratelimit.sh` | 7/7 |
+| `check-metrics.sh` | exit=0(修掉了"只在全新库上通过") |
+| `check-frontend-auth.sh` | 5/5 |
+| `check-probes.sh` | 9/9(含库真的停掉那四条) |
+| `check-queue-metrics.sh` | 12/12 |
+| `check-signal-idempotency.sh` | 6/6 |
+| `check-trigger-policy.sh` | 7/7 |
+| `check-outcome-metrics.sh` | 10/10 |
+| `check-feedback-loop.sh` | 13/13 |
+| `check-alert-rules.sh` | ALERT-RULES OK |
+| `check-prod-guards.sh` | 26/26 |
+| `go test ./internal/store/ -run DB` | 28 PASS |
+
+**本轮未跑:** `check-slo-burnrate.sh`(要额外起 Prometheus + exporter 容器)、
+`check-workflow-timeouts.sh`。
+
+### 这轮修掉的、让上面这些数字此前不可信的东西
+
+按危害排序 —— 前三条都属于"脚本报通过,但它其实没测到":
+
+1. **TRUNCATE 一直静默失败。** 18 个脚本开头的清库写成
+   `docker compose exec ... 2>&1 >/dev/null`,compose 没起时完全静默地失败,
+   断言照着**上一次运行的残留**打分。check-auth 因此报 11/14,而三条失败全部
+   级联自一个空的 investigation_id,没有一条指向真正原因。
+2. **五个脚本的清库撞外键。** 直接删 incidents 而 investigations 有外键引用,
+   于是有调查的 incident 删不掉。check-alert-rules 最典型:断言全过、
+   trap 里的清库失败、数据留库,下次运行的 correlation 合并到旧 incident。
+3. **停库操作是空操作。** check-probes / check-queue-metrics 用
+   `docker compose stop postgres` 来验证故障路径,库不是 compose 起的时候
+   那句什么也不做 —— "库停了会怎样"变成空转。
+4. **check-metrics 依赖运行顺序。** 注入的 signal 写死 startsAt,与 check-auth
+   的 body 相同,于是在非全新库上被幂等去重,计数器不出现,裸 grep 返回 1。
+5. **端口写死。** check-probes 的 8288 被 WSL 宿主侧进程占着(Linux 侧 ss/fuser
+   都看不到),表现是"control-plane 未就绪",而 `bind: address already in use`
+   埋在一堆启动 WARN 里。
+
+共同点:**失败不说话**。这也是为什么 `lib/db.sh` 的 dbq/dbx 在任何失败上
+终止整个脚本 —— 空值继续往下跑比报错难查得多。
+
 ## 核心设计原则落地
 
 Incident-first / Evidence-first / Workflow-first / Read-only / Deterministic guardrails /
