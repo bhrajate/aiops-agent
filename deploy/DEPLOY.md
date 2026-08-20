@@ -310,3 +310,33 @@ SELECT incident_id, superseded_by FROM incidents WHERE superseded_by IS NOT NULL
 | NetworkPolicy 阻断 Ingress→control-plane | 确认 ingress 控制器命名空间带 `kubernetes.io/metadata.name` 标签 |
 | Pod 因 readOnlyRootFilesystem 崩溃 | 确认可写临时卷(frontend 的 /var/cache/nginx、/tmp;worker 的 /tmp)已挂载 |
 
+
+### 8.1 演练脚本(业务库)
+
+§8 要求"每季度执行**实际**恢复演练,而非仅检查备份任务状态" —— 但此前没有脚本
+能做这件事,于是"演练"只能靠人临场拼命令,而临场拼的命令没人验证过。
+
+```bash
+./scripts/drill-backup-restore.sh        # 起独立容器,不碰生产
+```
+
+14 项断言,分三层。**第三层是重点**:
+
+1. 备份能恢复出来(pg_dump -Fc → 空库 pg_restore)
+2. 数据一致:各表条数相同 + **外键完整性**(条数对而引用断了同样是坏数据,
+   且只在应用查关联时才暴露)+ schema 版本已恢复
+3. **应用真的能用**:拉起 control-plane 指向恢复库,`/readyz` 就绪 → 登录 →
+   读回 incident 及其 investigation/evidence/hypothesis → **写一次**(认领)
+
+只做前两层的演练会漏掉一整类问题:schema 版本与镜像不匹配、缺 pgvector 扩展、
+序列没跟上导致主键冲突 —— 这些都能通过"数据看起来都在"的检查,
+然后在第一次真实请求时炸。第 3 层的写入断言专门盯序列那一类。
+
+演练脚本本身做过变异验证(证明它能发现坏的恢复):把 `pg_restore` 改成
+`--schema-only`(一个真实的操作失误,只恢复了结构没恢复数据)后,
+脚本以 exit 1 失败并报出 8 条具体断言 —— 条数不一致、schema_migrations 为空、
+/readyz 未就绪、读不到各对象。
+
+> 这个脚本覆盖的是**业务库**(唯一事实源)。Temporal 后端库、Kafka topic、
+> 对象存储三类的恢复要点见 §8 的表格,它们容忍有界重放(幂等保证),
+> 恢复的紧迫性低于业务库。
