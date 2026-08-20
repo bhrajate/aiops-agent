@@ -9,10 +9,13 @@ COMPOSE="$(dirname "$0")/../deploy/docker-compose.yml"
 # 造 namespace=rl 的 incident)留下的行会被当成断言对象 —— bob/viewer 对 rl
 # 确实无权,于是报出 4 个"RBAC/ABAC 失败",而鉴权其实完全正确。
 # 这是假失败,和之前几个脚本的假通过是同一类问题:断言前不确认前置状态。
-docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -q -c \
-  "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
+# 由脚本自身位置推导仓库根:任意 cwd 调用都对。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 查库走 lib/db.sh:连不上或 SQL 出错立刻终止,不让断言照着残留数据打分。
+source "$ROOT/scripts/lib/db.sh"
+dbx "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
    investigation_events, human_feedback, outbox, audit_log, idempotency_keys,
-   dead_letters CASCADE;" >/dev/null 2>&1
+   dead_letters CASCADE;"
 
 # 后端就绪预检:curl 静默失败会让所有断言拿到空值,报出误导性结论。
 curl -sf "$BASE/healthz" >/dev/null 2>&1 || {

@@ -5,14 +5,17 @@ set -u
 cd /home/glory/code/ai-generate/aiops
 BASE=http://localhost:8088
 COMPOSE=deploy/docker-compose.yml
-q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -t -c "$1" 2>/dev/null | tr -d ' ' | sed '/^$/d'; }
-
+# 由脚本自身位置推导仓库根:比相对路径稳,任意 cwd 调用都对。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 查库走 lib/db.sh:连不上或 SQL 出错时立刻终止,
+# 而不是让断言收到空串然后照着空数据打分(见该文件顶部注释)。
+source "$ROOT/scripts/lib/db.sh"
+q(){ dbq "$1"; }
 # 前置清库:本脚本第 37 行用**绝对计数**断言审计行数,上一次运行留下的记录
 # 会让它变成 2 而误判失败。其余脚本都清库,这个漏了。
-docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -q -c \
-  "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
+dbx "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypotheses,
    investigation_events, human_feedback, outbox, audit_log, idempotency_keys,
-   dead_letters CASCADE;" >/dev/null 2>&1
+   dead_letters CASCADE;"
 
 curl -sf "$BASE/healthz" >/dev/null 2>&1 || {
   echo "control-plane(:8088)未就绪 —— 请用 scripts/with-backend.sh 运行本脚本" >&2
@@ -33,9 +36,8 @@ echo "incident=$INC"
 [ -z "$INC" ] && { echo "NO INCIDENT — abort"; exit 1; }
 
 echo "=== 模拟崩溃窗口:插入 queued 且无 run_id 的孤儿调查(started_at 推到宽限期外)==="
-docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -c \
-  "INSERT INTO investigations (investigation_id, tenant_id, incident_id, incident_version, phase, budget, usage, started_at)
-   VALUES ('inv-orphan-test','default','$INC',1,'queued','{\"max_duration_sec\":300,\"max_rounds\":3,\"max_tokens\":200000,\"max_cost_usd\":2,\"max_tool_calls\":20}','{}', now() - interval '10 minutes');" >/dev/null 2>&1
+dbx "INSERT INTO investigations (investigation_id, tenant_id, incident_id, incident_version, phase, budget, usage, started_at)
+   VALUES ('inv-orphan-test','default','$INC',1,'queued','{\"max_duration_sec\":300,\"max_rounds\":3,\"max_tokens\":200000,\"max_cost_usd\":2,\"max_tool_calls\":20}','{}', now() - interval '10 minutes');"
 
 # 只断言"孤儿行已建立",不要求它此刻仍未被补偿:对账间隔仅 5s,
 # 完全可能在这条断言执行前就已补偿完 —— 那是**成功**,不该判失败。

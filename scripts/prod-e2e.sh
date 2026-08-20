@@ -24,8 +24,9 @@ wait_http(){ for i in $(seq 1 "${2:-30}"); do curl -sf "$1" >/dev/null 2>&1 && r
 
 # 清理端口 + 库 + topics
 for p in $(fuser 8088/tcp 8090/tcp 9100/tcp 2>/dev/null); do kill "$p" 2>/dev/null; done; sleep 1
-docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -c \
-  "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters CASCADE;" >/dev/null 2>&1
+# 查库走 lib/db.sh:连不上或 SQL 出错立刻终止,不让断言照着残留数据打分。
+source "$ROOT/scripts/lib/db.sh"
+dbx "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters CASCADE;"
 docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T redpanda rpk topic delete signals incidents investigations --brokers redpanda:29092 >/dev/null 2>&1
 docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T redpanda rpk topic create signals incidents investigations --brokers redpanda:29092 -p 1 -r 1 >/dev/null 2>&1
 
@@ -98,7 +99,6 @@ echo "=== 指标抓取 ==="
 curl -s localhost:8090/metrics | grep -E "aiops_(signals|tool|investigations)" | grep -v "^#" | head
 
 echo "=== 审计(含认证身份 alice)==="
-docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -t \
-  -c "select actor, action, result, count(*) from audit_log group by 1,2,3 order by 2;" 2>/dev/null | sed '/^$/d' | head -20
+dbq "select actor||' | '||action||' | '||coalesce(result,'-')||' | '||count(*) from audit_log group by 1,2,3 order by 2;" | head -20
 
 echo ""; echo "=== PROD E2E DONE ==="

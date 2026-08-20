@@ -6,14 +6,18 @@ set -u
 cd /home/glory/code/ai-generate/aiops
 BASE=http://localhost:8088
 COMPOSE=deploy/docker-compose.yml
-q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -t -c "$1" 2>/dev/null | tr -d ' ' | sed '/^$/d'; }
-
+# 由脚本自身位置推导仓库根:比相对路径稳,任意 cwd 调用都对。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 查库走 lib/db.sh:连不上或 SQL 出错时立刻终止,
+# 而不是让断言收到空串然后照着空数据打分(见该文件顶部注释)。
+source "$ROOT/scripts/lib/db.sh"
+q(){ dbq "$1"; }
 for pid in $(pgrep -f 'control-plane/bin/control-plane'); do kill "$pid" 2>/dev/null; done
 for p in $(fuser 8088/tcp 8090/tcp 2>/dev/null); do kill "$p" 2>/dev/null; done
 sleep 2
 docker compose -f "$COMPOSE" exec -T redpanda rpk topic delete signals incidents investigations --brokers redpanda:29092 >/dev/null 2>&1
 docker compose -f "$COMPOSE" exec -T redpanda rpk topic create signals incidents investigations --brokers redpanda:29092 -p 1 -r 1 >/dev/null 2>&1
-docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -c "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters, alert_groups CASCADE;" >/dev/null 2>&1
+dbx "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters, alert_groups CASCADE;"
 
 export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}" AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233" AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret" AIOPS_INTERNAL_TOKEN="internal-dev-token" AIOPS_WEBHOOK_SECRET="webhook-dev-secret"
 

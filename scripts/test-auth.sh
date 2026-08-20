@@ -15,8 +15,9 @@ for p in $(pgrep -f "$ROOT/control-plane/bin/control-plane"); do kill "$p" 2>/de
 sleep 2
 
 # 清库
-docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -c \
-  "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters CASCADE;" >/dev/null 2>&1
+# 查库走 lib/db.sh:连不上或 SQL 出错立刻终止,不让断言照着残留数据打分。
+source "$ROOT/scripts/lib/db.sh"
+dbx "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters CASCADE;"
 
 # 启动
 "$ROOT/control-plane/bin/control-plane" > /tmp/cp-auth.log 2>&1 &

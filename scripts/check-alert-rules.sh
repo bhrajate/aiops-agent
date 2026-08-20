@@ -57,7 +57,12 @@ for _ in $(seq 40); do
   sleep 1
 done
 
-q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -q -c "$1" >/dev/null 2>&1; }
+# 由脚本自身位置推导仓库根:比相对路径稳,任意 cwd 调用都对。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 查库走 lib/db.sh:连不上或 SQL 出错时立刻终止,
+# 而不是让断言收到空串然后照着空数据打分(见该文件顶部注释)。
+source "$ROOT/scripts/lib/db.sh"
+q(){ dbq "$1"; }
 # 造出**带 label 的** gauge:它们只在有行时才存在,不造就会被误判为"不存在"。
 q "DELETE FROM outbox WHERE topic LIKE 'ar-%'; DELETE FROM dead_letters WHERE topic LIKE 'ar-%';"
 # 顺带清理历史运行留下的 archk-* 命名空间数据,避免无界堆积。

@@ -19,7 +19,11 @@ sig(){ # deployment [status] [startsAt]
   local SIG=$(python3 -c "import hmac,hashlib;print('sha256='+hmac.new(b'webhook-dev-secret','''$BODY'''.encode(),hashlib.sha256).hexdigest())")
   curl -s -o /dev/null $BASE/v1/signals -H 'Content-Type: application/json' -H "X-AIOPS-Signature: $SIG" -d "$BODY"
 }
-q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -t -c "$1" 2>/dev/null | tr -d ' ' | sed '/^$/d'; }
+# 查库走 lib/db.sh:连不上/SQL 错时立刻终止,而不是让断言拿到空串。
+# 此前这里是 `psql ... 2>/dev/null`,库不可达时 16 条断言全显示"期望 1 实得 ",
+# 不说原因(见 lib/db.sh 顶部注释)。
+source "$ROOT/scripts/lib/db.sh"
+q(){ dbq "$1"; }
 
 pass=0; fail=0
 ck(){ if [ "$2" = "$3" ]; then echo "  ✓ $1 ($3)"; pass=$((pass+1)); else echo "  ✗ $1 期望 $2 实得 $3"; fail=$((fail+1)); fi; }

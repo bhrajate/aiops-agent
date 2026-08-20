@@ -31,8 +31,13 @@ for p in $PUB $INT; do
   fi
 done
 
-q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -tAc "$1" 2>/dev/null | tr -d ' ' | sed '/^$/d'; }
-qx(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -q -c "$1" >/dev/null 2>&1; }
+# 由脚本自身位置推导仓库根:比相对路径稳,任意 cwd 调用都对。
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 查库走 lib/db.sh:连不上或 SQL 出错时立刻终止,
+# 而不是让断言收到空串然后照着空数据打分(见该文件顶部注释)。
+source "$ROOT/scripts/lib/db.sh"
+q(){ dbq "$1"; }
+qx(){ dbx "$1"; }
 login(){ curl -s --max-time 6 "http://127.0.0.1:$PUB/v1/auth/login" -H 'Content-Type: application/json' \
   -d "{\"username\":\"$1\",\"password\":\"$2\"}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }

@@ -2,7 +2,9 @@
 # 端到端联调脚本:启动 cluster-agent + control-plane + ai-worker,注入 Signal,验证全链路。
 # 用 PID 精确管理进程(避免 pkill -f 误杀本脚本)。
 set -u
-ROOT="/home/glory/code/ai-generate/aiops"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 查库走 lib/db.sh:连不上或 SQL 出错立刻终止,不让输出静默变空。
+source "$ROOT/scripts/lib/db.sh"
 export GOPROXY=https://goproxy.cn,direct
 export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
 export AIOPS_KAFKA_BROKERS="localhost:19092"
@@ -129,8 +131,7 @@ sleep 1
 curl -s "localhost:8088/v1/incidents/$INC" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("incident status:",d["incident"]["status"]);print("investigation phase:",d["investigations"][0]["phase"] if d["investigations"] else "?")'
 
 echo "=== 10) 审计日志抽样 ==="
-docker compose -f "$ROOT/deploy/docker-compose.yml" exec -T postgres psql -U aiops -d aiops -t \
-  -c "select action, result, count(*) from audit_log group by action, result order by 1;" 2>/dev/null | sed '/^$/d'
+dbq "select action||' | '||coalesce(result,'-')||' | '||count(*) from audit_log group by action, result order by 1;"
 
 echo "done. logs in $LOGDIR"
 echo "=== ai-worker log tail (errors only) ==="
