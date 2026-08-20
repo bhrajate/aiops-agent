@@ -47,6 +47,7 @@ func seedStatIncident(t *testing.T, st *Store, id, status string,
 // 但值班人员 10 分钟前才把它标成 resolved。查 1 小时窗口时:
 //   - last_seen(2.5h 前)不在窗口内
 //   - status 是 resolved,不在 ('open','acknowledged') 里
+//
 // 修复前它两个条件都不满足 → 不在结果里 → MTTR 拿不到这个样本。
 //
 // 而它恰恰是 MTTR 最该统计的那种故障:总耗时 2h50m,远超那些"信号还在响就被
@@ -60,9 +61,9 @@ func TestDBIncidentStatRowsIncludesLateResolved(t *testing.T) {
 	now := time.Now()
 	resolved := now.Add(-10 * time.Minute)
 	seedStatIncident(t, st, "inc-stats-late", "resolved",
-		now.Add(-3*time.Hour),          // first_seen
-		now.Add(-150*time.Minute),      // last_seen:窗口外
-		&resolved,                      // resolved_at:窗口内
+		now.Add(-3*time.Hour),     // first_seen
+		now.Add(-150*time.Minute), // last_seen:窗口外
+		&resolved,                 // resolved_at:窗口内
 	)
 
 	rows, err := st.IncidentStatRows(ctx, 1) // 1 小时窗口

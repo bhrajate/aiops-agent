@@ -89,6 +89,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ---- 单租户边界护栏 ----
+	// 本系统的设计范围是单租户部署(tenant_id 为未来多租户预留),读路径**不按
+	// tenant_id 过滤**。把两个租户指向同一个库时,系统会照常跑,而
+	// GET /v1/incidents 会把两边的 incident 一起返回 —— ABAC 拦不住(它按
+	// cluster/namespace 过滤,而不同租户完全可能用同名 namespace),
+	// 审计里每条也都是"合法用户读了存在的 incident"。没有任何症状。
+	//
+	// 生产 fail-fast;非生产只警告 —— 开发库里混着各种测试租户是常态,
+	// 在那里硬拒会让人为了起服务去删数据,而那比警告更糟。
+	if err := st.CheckSingleTenant(ctx, cfg.Tenant); err != nil {
+		if cfg.IsProduction() {
+			log.Error("单租户边界校验失败", "err", err)
+			os.Exit(1)
+		}
+		log.Warn("单租户边界校验未通过(非生产,仅警告)", "err", err)
+	}
+
 	// ---- Temporal(可降级)----
 	var wf interface {
 		trigger.WorkflowStarter
