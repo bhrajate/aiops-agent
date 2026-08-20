@@ -306,9 +306,14 @@ export function StatCard({
   }[emphasis === false ? 'default' : tone]
 
   const Tag = onClick ? 'button' : 'div'
+  // 不可点的卡给 role="group",让它和可点的那些一样有个可及名。
+  // 否则读屏会把数字与标签读成互不相关的两段文本("—" 单独出现毫无意义),
+  // 而 data-stat 让 e2e 能按标签定位整张卡(只读标签 span 拿不到值)。
   return (
     <Tag
       onClick={onClick}
+      role={onClick ? undefined : 'group'}
+      data-stat={typeof label === 'string' ? label : undefined}
       className={cn(
         'rounded-xl border border-line-soft bg-card p-3.5 text-left',
         onClick &&

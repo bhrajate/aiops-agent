@@ -8,3 +8,8 @@ dist-ssr
 .DS_Store
 *.log
 *.tsbuildinfo
+
+# Playwright 产物
+/test-results/
+/playwright-report/
+/blob-report/

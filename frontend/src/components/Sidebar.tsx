@@ -134,10 +134,14 @@ export function Sidebar() {
   if (sidebarCollapsed) {
     return (
       <aside className="flex h-full w-14 shrink-0 flex-col items-center gap-1 overflow-hidden border-r border-line-soft bg-card py-3">
+        {/* 品牌标记的可及名用"AIOps 值班台"而非"展开侧边栏":它与下面那个
+            折叠按钮功能相同,但若两者共用同一个 aria-label,读屏用户会连续听到
+            两个同名控件而无法区分是哪个。展开的意图放在 title 里。
+            (e2e/workbench.spec.ts 断言折叠态下"展开侧边栏"只匹配一个控件) */}
         <button
           type="button"
           onClick={toggleSidebar}
-          aria-label="展开侧边栏"
+          aria-label="AIOps 值班台"
           title="AIOps 值班台 · 点击展开"
           className="rounded-lg p-1.5 text-accent hover:bg-card-soft"
         >
