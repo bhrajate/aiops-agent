@@ -101,3 +101,43 @@ dbx() {
 
 # db_mode 供脚本打印当前连库方式,便于排查"跑的是哪个库"。
 db_mode() { printf '%s' "$_DB_MODE"; }
+
+# db_stop / db_start 停掉与拉起数据库,用于验证故障路径
+# (check-probes 的 /readyz→503、check-queue-metrics 的 gauge 缺失)。
+#
+# 必须跟着 _db_resolve 的结果走。此前这两个脚本硬编码
+# `docker compose stop postgres`:当数据库不是 compose 起的(比如本机 5432 被占
+# 而用了独立容器),这句**静默成为空操作** —— 库根本没停,而那两个脚本要测的
+# 恰恰是"库停了会怎样"。故障路径测试变成空转,却照样打出通过。
+#
+# 解析不到可停的目标时返回 1,让调用方跳过并明确说明,而不是假装测过了。
+db_stop() {
+  case "$_DB_MODE" in
+    container:*) docker stop "${_DB_MODE#container:}" >/dev/null 2>&1 ;;
+    compose) docker compose -f "${ROOT:-.}/deploy/docker-compose.yml" stop postgres >/dev/null 2>&1 ;;
+    *)
+      echo "SKIP: 当前连库方式($_DB_MODE)无法停库 —— 故障路径未被验证" >&2
+      return 1
+      ;;
+  esac
+}
+
+db_start() {
+  case "$_DB_MODE" in
+    container:*) docker start "${_DB_MODE#container:}" >/dev/null 2>&1 ;;
+    compose) docker compose -f "${ROOT:-.}/deploy/docker-compose.yml" start postgres >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# db_ready 判断库是否已可接受连接。停库后等待恢复时用。
+# 跟着 _DB_MODE 走,理由同 db_stop:硬编码 compose 的 pg_isready 在库不是
+# compose 起的时候永远失败,于是调用方白等完超时再继续,
+# 而后续断言会对着一个还没就绪的库跑 —— 那种失败看起来像功能坏了。
+db_ready() {
+  case "$_DB_MODE" in
+    container:*) docker exec "${_DB_MODE#container:}" pg_isready -U aiops -d aiops >/dev/null 2>&1 ;;
+    compose) docker compose -f "${ROOT:-.}/deploy/docker-compose.yml" exec -T postgres pg_isready -U aiops -d aiops >/dev/null 2>&1 ;;
+    *) $_DB_CMD -tAc 'select 1' >/dev/null 2>&1 ;;
+  esac
+}

@@ -52,7 +52,7 @@ AIOPS_RETENTION_ENABLED=false \
 CP_PID=$!
 restore(){
   kill $CP_PID 2>/dev/null; wait $CP_PID 2>/dev/null
-  docker compose -f "$COMPOSE" start postgres >/dev/null 2>&1
+  db_start
   for _ in $(seq 30); do
     docker compose -f "$COMPOSE" exec -T postgres pg_isready -U aiops -d aiops >/dev/null 2>&1 && break
     sleep 1
@@ -96,7 +96,7 @@ DEAD=$(echo "$M" | awk '/^aiops_outbox_dead /{print int($2)}')
 [ "$DEAD" -ge 1 ] 2>/dev/null && ok "dead 存量 >=1($DEAD)" || bad "dead 期望 >=1,得 '$DEAD'"
 
 info "3) 数据库不可用 —— 本项核心:指标必须缺失而非为 0"
-docker compose -f "$COMPOSE" stop postgres >/dev/null 2>&1
+db_stop
 sleep 3
 M2=$(scrape)
 if echo "$M2" | grep -q '^aiops_queue_scrape_failed 1'; then
@@ -118,7 +118,7 @@ echo "$M2" | grep -q '^aiops_signals_ingested_total\|^go_goroutines' \
   || bad "整个 /metrics 都不可用了"
 
 info "4) 数据库恢复后指标回来"
-docker compose -f "$COMPOSE" start postgres >/dev/null 2>&1
+db_start
 BACK=0
 for _ in $(seq 40); do
   if scrape | grep -q '^aiops_outbox_oldest_pending_age_seconds '; then BACK=1; break; fi
