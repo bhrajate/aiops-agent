@@ -1,6 +1,8 @@
 # AIOps Agent
 
-生产级 AIOps Agent 系统 —— 以 **Incident 驱动、证据优先、工作流主导、默认只读** 为核心路线的 Kubernetes 故障根因分析(RCA)平台。
+> Kubernetes 故障根因分析(RCA)平台 —— 把 LLM 塞进一个**可靠、可验证、可停止**的调查系统,让 AI 在只读证据上推理,而不是自由发挥。
+
+以 **Incident 驱动、证据优先、工作流主导、默认只读** 为核心路线:信号进来 → 确定性护栏触发 → Temporal 可恢复工作流编排调查 → 类型化只读工具收敛证据 → 带 Evidence ID 的结论 → 由值班人员最终闭环。
 
 > 本仓库是对 [`生产级AIOps-Agent架构设计.md`](docs/生产级AIOps-Agent架构设计.md) 的工程实现。设计文档为架构基线,本 README 描述代码结构与运行方式。
 
