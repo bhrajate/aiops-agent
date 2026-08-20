@@ -72,7 +72,12 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 ./scripts/prod-e2e.sh                       # 全链路(自带构建 + 起后端)
 ./scripts/with-backend.sh scripts/check-two-tier.sh \
                           scripts/check-correlation-window.sh \
-                          scripts/check-blast.sh
+                          scripts/check-blast.sh \
+                          scripts/check-loadtest.sh
+#   ^ check-loadtest.sh 是**压测**,不是功能断言:默认以远超限流值的速率连打 12s
+#     (24 并发 × ~50/s 配置)。它会等 outbox 排空再断言,所以必须挂在有 Redpanda/
+#     Temporal 的完整栈上(见上方 topic 隐患)。可用 AIOPS_LT_RATE/AIOPS_LT_DURATION
+#     调档;HTTP 端口走 AIOPS_LT_PORT(默认 8088)。
 ./scripts/check-ratelimit.sh                # 自带构建 + 起独立实例
 # 下面三个也自带构建 + 起独立实例,同样**不要**用 with-backend.sh 包裹。
 # 前两个会**临时停掉 postgres** 来验证故障路径(退出时用 trap 恢复):
@@ -99,6 +104,7 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-orphan-reconcile.sh` | 孤儿调查补偿 | 4/4 |
 | `check-roles.sh` | 按角色拆分部署单元 | 11/11 |
 | `check-ratelimit.sh` | 入口限流:429 + Retry-After + **按条计费** + 指标(F6) | 7/7 |
+| `check-loadtest.sh` | 负载下护栏:**真实压测**限流生效 + 放行速率不超 3x + 429 带 Retry-After;**并发幂等**(200 并发投同一条只落 1 行且 `signal_count` 恰为 1);outbox 无 dead 积压。包装 `loadtest-ingress.py`,吞吐基线供日后对比 | 4/4 |
 | `check-metrics.sh` | Prometheus 指标暴露 | PASS |
 | `check-frontend-auth.sh` | 前端登录与越权 | 5/5 |
 | `check-probes.sh` | 探针语义分离:**真的停 postgres**,`/readyz` 返 503(副本被摘出 endpoints)、`/healthz` 仍 200(不重启进程)、恢复后自动放回(P3) | 9/9 |
@@ -128,6 +134,7 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-orphan-reconcile.sh` | 4/4 **(需要 Temporal 在跑;缺它时 3 条必失败)** |
 | `check-roles.sh` | 11/11 |
 | `check-ratelimit.sh` | 7/7 |
+| `check-loadtest.sh` | 4/4(真实压测:10105 条请求 → 202=1087 / 429=9018,放行 90.5/s vs 配置 50;200 并发幂等只落 1 行且 `signal_count`=1;outbox 排空 0 残留,无 dead。p50=24.6ms / p99=54.9ms) |
 | `check-metrics.sh` | exit=0(修掉了"只在全新库上通过") |
 | `check-frontend-auth.sh` | 5/5 |
 | `check-probes.sh` | 9/9(含库真的停掉那四条) |
@@ -144,7 +151,7 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-slo-burnrate.sh` | 17/17(自带起 Prometheus + exporter 容器) |
 | `go test ./internal/store/ -run DB` | 32 PASS(含单租户护栏 4 项) |
 
-全部 23 项都跑过,无遗漏。
+全部 24 项都跑过,无遗漏。
 
 `check-frontend-e2e.sh` 需要先装 Chromium(约 170MB,含 headless shell):
 
