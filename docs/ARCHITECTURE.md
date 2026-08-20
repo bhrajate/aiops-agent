@@ -70,7 +70,7 @@
 | **数据保留** | — | ✅ **Janitor 分批清理**(F4):此前所有高写入表无界增长,无保留也无分区。只删终态数据,活跃 incident 与未结束调查的上下文永不触碰;多副本靠 PG advisory lock 互斥;保留期全部可配。未采用分区表(首版数据量下成本高于收益,阈值已记入迁移注释) | 已闭合 |
 | **告警风暴防护** | — | ✅ **入口限流**(F6):按租户令牌桶,**按信号条数计费**(一个 webhook 可带数百条告警,按请求计费形同虚设),写库前判定,429 带 Retry-After。**权衡**:进程内实现,每副本独立配额 → 集群总容量 = 配置值 × 副本数;这是为了不给信号入口引入 Redis 这个新的必经故障点。需要全局精确配额时换实现即可,接口不变 | 已闭合(含权衡记录) |
 | **多集群** | 每集群一个只读 Agent | ✅ 已实现:`AIOPS_CLUSTER_AGENTS`(cluster_id→URL 映射)+ Gateway 按 `incident.cluster_id` 路由;未配置的集群**拒绝**工具调用(`no_agent_for_cluster`)而非回退,避免跨集群误读。未配置映射时退化为单集群兼容模式 | 已闭合 |
-| **Cluster Agent 形态** | 推拉结合(含主动上报 Signal) | **仅 pull**:被动 HTTP 工具服务,无主动上报、无 K8s Event watch。瞬时事件若超出查询时间窗或被 K8s 回收即不可得 | 功能未实现 |
+| **Cluster Agent 形态** | 推拉结合(含主动上报 Signal) | ✅ **推拉结合已实现**:`internal/eventwatch` 用 informer watch K8s Event,按 `type=Warning` + reason 白名单(**默认拒绝**)筛选,合成 signal 走既有 `POST /v1/signals`。默认关闭(`AIOPS_EVENT_WATCH_ENABLED`)——它让 agent 从纯被动变成会主动出站,这种形态变化不该靠升级悄悄生效。**幂等靠 5 分钟时间桶**:只按 Event UID 定身份会让 `last_seen` 永不前移(持续故障看起来已结束),每个 UPDATE 一条则会让 `signal_count` 虚增(F12 的失效模式,而那个数判"信号突发")。桶宽决定上界:每事件每小时最多 12 条。`signal_id` **刻意留空**由控制面 `DeriveSignalID` 推导 —— agent 是独立 module 不能 import 它,自己算会形成第二套幂等规则 | 已闭合(含权衡记录) |
 | **证据时间窗** | 按需 | 由 `incident.first_seen` 推导(前置 15 分钟基线,上限 24h);模型不能自定义时间范围 | 已改进,仍非模型可控 |
 | **观测后端隔离** | 每集群一套 或 中心共享 | ✅ **观测查询已迁至控制面直连**(`control-plane/internal/obsquery`):共享 Prometheus/Loki/Tempo 不在任何集群内,由 Tool Gateway 直接查询,不再绕经 cluster-agent(少一跳、少一个必经故障点、凭据一份)。守卫完整随迁:PromQL AST 级 label 强制注入(防裸选择器绕过)、LogQL 流选择器注入、`cluster`+`namespace` 双维度强制(`AIOPS_CLUSTER_LABEL`)、跨范围 matcher 拒绝、DNS-1123 校验、响应体上限、时间窗上限。cluster-agent 收窄为**纯 K8s 只读代理**。**权衡**:控制面因此持有观测后端凭据;若控制面威胁模型变化(暴露到更不可信网络),这是第一个应回退的决定 | 已闭合(含权衡记录) |
 
@@ -81,12 +81,22 @@
 
 | 缺口 | 现状 | 影响 |
 |---|---|---|
-| **拓扑 / 服务图相关性** | 相关性维度只有 tenant/cluster/namespace + 时间窗;`topology_refs` / `change_refs` 有列无写入点 | 跨 namespace 的上下游传播不会被合并——而依赖类故障恰恰常常跨 namespace。同 namespace 相关 ≠ 因果 |
-| **反馈回流学习** | 人工反馈只落库;不生成 golden case、不更新 runbook,workflow 收到反馈即结束 | 系统不会因为被纠正而变好。长期价值取决于这个闭环 |
-| **主动发现(异常检测 / SLO burn-rate)** | 纯被动,只消费别人配好的告警 | 覆盖面受既有告警规则限制;没有告警规则的故障不可见 |
+| **拓扑 / 服务图相关性** | ✅ 已实现(第六轮):`internal/topology` 从 Tempo service graph 同步调用边,回填 `topology_refs` 并链接拓扑相邻的活跃 incident。**刻意不合并 incident 只建"疑似同源"链接** —— 一条误判的边会把两次无关故障焊死,而拆分比合并难得多 | 已闭合 |
+| **反馈回流学习** | ✅ 已实现(第六轮):confirm/correct 反馈自动提升为 `pending` golden case,`GET /v1/golden-cases` 待审队列 + sre/admin 审核后入评测集。**一律 pending 绝不直接 approved** —— 一条错误标注会让质量门槛失真,而这种失真极难发现 | 已闭合 |
+| **主动发现** | ✅ 两条路都已实现:SLO 多窗口燃尽率(第六轮,`internal/slo`)+ K8s Event watch(`cluster-agent/internal/eventwatch`)。后者补的正是"没有告警规则覆盖的故障不可见" —— Event 在 etcd 里只留 1 小时,而此前没人查过它 | 已闭合 |
 
-另有两个已定位、修法明确但本轮未做的缺陷,以及成效指标缺位,详见
-[OPTIMIZATION-LOG.md](OPTIMIZATION-LOG.md)。
+> ⚠️ 上表原先记的是"它们不是没做完,是还没开始做"。三项都已在第六轮及之后闭合,
+> 而这段描述一直没跟着改 —— 文档漂移在两个方向上都会误导人:低估已有能力,
+> 也会让人以为某个坑还在。同理,原先"另有两个已定位但本轮未做的缺陷"指的是
+> F5/F7/F10,它们在第五轮已全部修完(见 OPTIMIZATION-LOG 的状态表)。
+
+**仍然真实的边界**(与上面三项不同,这些确实没做):
+
+| 边界 | 现状 |
+|---|---|
+| **深度 RCA 的轮内适应** | 计划先定、采集期模型不参与,要追问需等下一轮。取舍换来可重放性与事前预算闸门;能力上界低于"自由追问式" RCA。改造方案(durable agent)已评估并**刻意否掉**,等一个"固定计划导致漏查"的生产案例再重启 —— 见 OPTIMIZATION-LOG 第九轮 |
+| **证据时间窗不可由模型指定** | 由 `incident.first_seen` 推导(前置 15 分钟基线,上限 24h) |
+| **租户隔离是进程级** | `tenant_id` 是"为未来多租户预留"(设计文档 §30),`Principal` 上没有租户字段,读路径不按它过滤。要行级隔离需先往 JWT claims 加租户 —— 那是认证模型变更,不是补丁 |
 
 生产验收的逐项落地状态见 [ACCEPTANCE.md](ACCEPTANCE.md);
 本轮各项改动的**背景与权衡理由**见 [OPTIMIZATION-LOG.md](OPTIMIZATION-LOG.md)。

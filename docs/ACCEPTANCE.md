@@ -138,11 +138,23 @@ for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f
 | `check-feedback-loop.sh` | 13/13 |
 | `check-alert-rules.sh` | ALERT-RULES OK |
 | `check-prod-guards.sh` | 26/26 |
+| `check-event-watch.sh` | 8/8(K8s Event watch 的幂等契约,对真实 ingress) |
+| `check-frontend-e2e.sh` | 7/7(真实 Chromium 渲染,需先 `npm run e2e:install`) |
 | `check-workflow-timeouts.sh` | 14/0 |
 | `check-slo-burnrate.sh` | 17/17(自带起 Prometheus + exporter 容器) |
 | `go test ./internal/store/ -run DB` | 28 PASS |
 
-全部 21 项都跑过,无遗漏。
+全部 23 项都跑过,无遗漏。
+
+`check-frontend-e2e.sh` 需要先装 Chromium(约 170MB,含 headless shell):
+
+```bash
+cd frontend && npm run e2e:install
+./scripts/check-frontend-e2e.sh     # 起后端 + vite,跑 7 个浏览器用例
+```
+
+它刻意**不接 CI**:那 170MB 的下载换来的边际价值,目前低于已有的 21 项后端契约
+测试 + 43 项前端单测。等前端交互复杂到"构建通过但页面白屏"真的发生过再接。
 
 ### 这轮修掉的、让上面这些数字此前不可信的东西
 

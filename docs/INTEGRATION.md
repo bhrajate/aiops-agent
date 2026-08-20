@@ -420,3 +420,56 @@ AIOPS_MAX_CONCURRENT_ACTIVITIES=16
 `heartbeat_while` 起并发任务覆盖整个等待期。这一点是必须的:设了
 `heartbeat_timeout` 却没人按时心跳,Temporal 会把正常推理判成失联并重试 ——
 比不设心跳更糟。
+
+## K8s Event watch(cluster-agent 主动上报)
+
+默认关闭。开启后 agent 用 informer watch Event,筛选后合成 signal 走
+`POST /v1/signals`(**原生格式**,非 Alertmanager webhook 格式)。
+
+```bash
+AIOPS_EVENT_WATCH_ENABLED=true          # 默认 false
+AIOPS_CONTROL_INGRESS_URL=http://control-plane:8088   # 可只给基地址,自动补 /v1/signals
+AIOPS_WEBHOOK_SECRET=<与控制面同一份>
+AIOPS_EVENT_WATCH_REASONS=              # 留空用默认白名单(见下)
+AIOPS_EVENT_WATCH_NAMESPACES=           # 留空 = 全部
+AIOPS_EVENT_WATCH_RATE_PER_SEC=5
+AIOPS_EVENT_WATCH_RESYNC_SEC=0          # 0 = 不周期重放
+AIOPS_DATASOURCE=live                   # 必须;mock 在**任何**环境都被拒
+```
+
+**默认放行的 reason**:`OOMKilling` `Evicted` `FailedScheduling` `FailedMount`
+`FailedAttachVolume` `BackOff` `ErrImagePull` `Failed` `FailedCreatePodSandBox`
+`NodeNotReady` `Preempted`。
+
+`Unhealthy` **不在**默认名单:它在滚动发布期间持续刷(探针在新 Pod 就绪前失败是
+正常的),会把每次正常发布变成一串 signal —— 而值班人员学会忽略它之后,
+真正的探针故障也就看不见了。需要它的集群显式配 `AIOPS_EVENT_WATCH_REASONS`。
+
+### 幂等:5 分钟时间桶
+
+agent **不填 `signal_id`**,由 ingress 的 `DeriveSignalID` 推导
+(payload 哈希 + `signal_type` + `starts_at`)。agent 自己算会形成第二套幂等规则,
+而两套规则的分歧只在生产的重复数据里显现。
+
+`starts_at` 是事件最近发生时刻**归一化到 5 分钟桶**的结果。两种直觉做法都错:
+
+- 只按 Event UID 定身份 → 一次 OOMKill 循环两小时只产生一个 signal,
+  `incident.last_seen` 永不前移。界面上那个故障看起来"10 分钟前的事",而它正在发生。
+- 每个 informer UPDATE 一条 → `count` 从 1 涨到 200 就是 200 条 signal。
+  这正是 F12 的失效模式:表里去重了但 `signal_count` 虚增,而那个数判"信号突发"
+  (`burst_signals=3`),于是一个 Pod 反复重启被读成影响面扩大、拉起多轮 RCA。
+
+桶宽决定上界:**每事件每小时最多 12 条**。载荷因此不能含 `count`(它递增)
+或任何随时间变化的字段 —— 那会破坏同桶内的字节稳定性。
+
+### 两处必须知道的取舍
+
+**agent 需要 webhook secret**,这是威胁面的实质变化:agent 跑在业务集群里,
+比控制面更可能被攻陷,而拿到 secret 就能伪造 signal → 伪造 incident。
+缓解:按集群一份(不与其他集群共用),ingress 侧逐条记审计。若 agent 的
+威胁模型变化,这是第一个应回退的决定。
+
+**mock 数据源在任何环境都拒绝启动**(比 `datasource` 那条只在生产拒更硬)。
+假 evidence 只污染一次调查的结论;假 signal 会**创建真 incident**、走完整的
+两层聚合与触发策略、可能拉起自动调查,并出现在值班界面上 ——
+值班人员会去排查一个从不存在的故障,而库里所有痕迹都表明它真的发生过。
