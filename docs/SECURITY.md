@@ -110,3 +110,44 @@ Signal/Incident 消费重试超过 `AIOPS_MAX_DELIVERY_ATTEMPTS`(默认 5)进入
 ## 8. 审计
 
 所有写操作与拒绝事件记 `audit_log`,`actor` 为 JWT `sub`(非 `operator` 缺省);权限拒绝记 `result=denied` + 原因。
+
+## 密钥轮换
+
+所有密钥都**只在启动时从环境变量读取**,没有热重载。这是 K8s 下的常规形态
+(改 Secret → 滚动重启),但 `AIOPS_WEBHOOK_SECRET` 有个额外的坑:
+
+**滚动重启期间一半副本持旧密钥、一半持新密钥。** Alertmanager 无论用哪个签名,
+都会被另一半副本以 401 拒绝。而 Signal Ingress 的 401 意味着**告警丢失** ——
+Alertmanager 重试几次就放弃,那段时间的故障在本系统里完全不存在,
+而两边的日志都只显示"签名校验失败",看不出是轮换造成的。
+
+因此 `AIOPS_WEBHOOK_SECRET` 支持**逗号分隔的多个密钥**,任一匹配即通过。
+轮换按三步走:
+
+```bash
+# 1) 加新密钥(新在前,旧在后),滚动重启 —— 此时两种签名都收
+AIOPS_WEBHOOK_SECRET="new-secret,old-secret"
+
+# 2) 把 Alertmanager / cluster-agent 切到 new-secret
+
+# 3) 摘掉旧密钥,滚动重启 —— 旧的失效
+AIOPS_WEBHOOK_SECRET="new-secret"
+```
+
+第 3 步不能省:只做前两步的话"轮换"只是**多了一个**密钥,泄漏的那个仍然可用。
+
+几个实现细节:
+
+- 比较对每个候选密钥都做完(不因某个匹配就提前 break),使比较次数与
+  "第几个密钥匹配"无关。
+- 全空白(`" , "`)会被解析成 0 个密钥,而 0 个密钥的行为是**放行且不校验**。
+  生产启动校验按"未设"拒绝这种值 —— 否则配置看起来设了、启动不报错,
+  而 Signal Ingress 实际上完全没有鉴权。
+- 其余密钥(`AIOPS_AUTH_HS256_SECRET`、`AIOPS_INTERNAL_TOKEN`)没有多值支持。
+  前者在 OIDC 生产模式下不使用(JWKS 轮换由 IdP 侧的 kid 机制处理,
+  本系统会按 kid 自动拉取新公钥);后者只在控制面内部调用间使用,
+  两端同时滚动重启的窗口内会有少量 5xx,由 Temporal 的 Activity 重试兜住。
+
+> Vault / KMS 与自动轮换属于部署侧:把 Secret 的来源换成 External Secrets
+> Operator 或 CSI driver 即可,应用侧不需要改 —— 它只读环境变量。
+> 上面那个多密钥机制正是为了让这类自动轮换**不丢信号**。

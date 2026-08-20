@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/aiops/control-plane/internal/webhookauth"
 )
 
 // DefaultHS256Secret 是开发用不安全默认值;生产模式启动校验会拒绝它。
@@ -410,8 +412,14 @@ func (c Config) Validate() error {
 		if c.InternalToken == "" {
 			problems = append(problems, "生产模式必须设置 AIOPS_INTERNAL_TOKEN(内部 API 共享密钥)")
 		}
-		if c.WebhookSecret == "" {
-			problems = append(problems, "生产模式必须设置 AIOPS_WEBHOOK_SECRET(Signal webhook HMAC 密钥)")
+		// 支持逗号分隔的多个密钥(轮换窗口用)。全空白也算未设 ——
+		// `AIOPS_WEBHOOK_SECRET=" , "` 会被 webhookauth 解析成 0 个密钥,
+		// 而 0 个密钥的行为是**放行且不校验**。那正是生产最不该有的状态,
+		// 所以这里按"未设"拒绝,而不是让它通过校验再在运行时静默放行。
+		if len(webhookauth.ParseSecrets(c.WebhookSecret)) == 0 {
+			problems = append(problems,
+				"生产模式必须设置 AIOPS_WEBHOOK_SECRET(Signal webhook HMAC 密钥;"+
+					"轮换期可配\"新,旧\"两个)")
 		}
 		if c.AgentMTLSEnabled {
 			if c.AgentClientCert == "" || c.AgentClientKey == "" || c.AgentCA == "" {

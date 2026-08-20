@@ -213,3 +213,34 @@ func TestValidate_AcceptsDefaultTemporalRunTimeout(t *testing.T) {
 		t.Fatalf("默认值应通过校验: %v", err)
 	}
 }
+
+// 生产校验必须把"全空白的 webhook secret"当成未设。
+//
+// 为什么单独测:webhookauth 在 0 个密钥时的行为是**放行且不校验**
+// (开发便利)。若 Validate 只判 `== ""`,那么 AIOPS_WEBHOOK_SECRET=" , "
+// 能通过生产校验,然后在运行时对所有未签名请求放行 ——
+// 配置看起来设了、启动没报错、而 Signal Ingress 实际上完全没有鉴权。
+func TestProductionRejectsBlankWebhookSecret(t *testing.T) {
+	base := func(secret string) Config {
+		return Config{
+			Env:           "production",
+			AuthMode:      "hs256",
+			HS256Secret:   "a-sufficiently-long-random-secret-value",
+			InternalToken: "tok",
+			WebhookSecret: secret,
+			PrometheusURL: "http://prom:9090",
+			ClusterLabel:  "cluster",
+		}
+	}
+	for _, blank := range []string{"", " ", ",", " , ", ",,"} {
+		if err := base(blank).Validate(); err == nil {
+			t.Errorf("AIOPS_WEBHOOK_SECRET=%q 应被生产校验拒绝(它会退化成不鉴权)", blank)
+		}
+	}
+	// 单个密钥与轮换用的两个密钥都应通过
+	for _, ok := range []string{"s1", "new,old", " new , old "} {
+		if err := base(ok).Validate(); err != nil {
+			t.Errorf("AIOPS_WEBHOOK_SECRET=%q 应通过,得到 %v", ok, err)
+		}
+	}
+}
