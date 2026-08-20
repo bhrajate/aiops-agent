@@ -42,6 +42,16 @@ func scanInvestigation(row rowScanner) (model.Investigation, error) {
 	if err != nil {
 		return inv, err
 	}
+	unmarshalInvestigationJSON(&inv, budget, usage, diagnosis)
+	return inv, nil
+}
+
+// unmarshalInvestigationJSON 解开 investigation 的三个 JSONB 列。
+// 抽出来供 ListInvestigations 复用 —— 它的 SELECT 多带了 incident 字段,
+// 没法走 scanInvestigation,但 diagnosis 的 "null" 处理必须与这里一致:
+// 漏掉那个判断会把 JSON null 解成零值 DiagnosisResult,前端看到的是
+// "status 为空的诊断"而不是"还没有诊断"。
+func unmarshalInvestigationJSON(inv *model.Investigation, budget, usage, diagnosis []byte) {
 	_ = json.Unmarshal(budget, &inv.Budget)
 	_ = json.Unmarshal(usage, &inv.Usage)
 	if len(diagnosis) > 0 && string(diagnosis) != "null" {
@@ -50,7 +60,6 @@ func scanInvestigation(row rowScanner) (model.Investigation, error) {
 			inv.Diagnosis = &d
 		}
 	}
-	return inv, nil
 }
 
 func (s *Store) GetInvestigation(ctx context.Context, id string) (model.Investigation, error) {

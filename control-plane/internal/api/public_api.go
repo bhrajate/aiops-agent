@@ -97,9 +97,15 @@ func (a *PublicAPI) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/auth/me", a.me)
 
 	mux.HandleFunc("POST /v1/signals", a.ingress.PostSignal) // 自有 webhook 鉴权
+	// 值班总览:一次返回首屏所需的全部聚合(见 overview.go 的口径说明)
+	mux.HandleFunc("GET /v1/overview", a.getOverview)
 	mux.HandleFunc("GET /v1/incidents", a.listIncidents)
 	mux.HandleFunc("GET /v1/incidents/{id}", a.getIncident)
 	mux.HandleFunc("POST /v1/incidents/{id}/investigations", a.startInvestigation)
+	// 认领 / 标记已解决(关闭仍走调查反馈的 close 动作)
+	mux.HandleFunc("POST /v1/incidents/{id}/status", a.updateIncidentStatus)
+	// 跨 incident 的调查队列 —— 回答"现在有什么在跑、什么卡住了"
+	mux.HandleFunc("GET /v1/investigations", a.listInvestigations)
 	mux.HandleFunc("GET /v1/investigations/{id}", a.getInvestigation)
 	mux.HandleFunc("GET /v1/investigations/{id}/events", a.streamEvents)
 	mux.HandleFunc("POST /v1/investigations/{id}/cancel", a.cancelInvestigation)
@@ -109,6 +115,9 @@ func (a *PublicAPI) Routes() http.Handler {
 	// 反馈闭环:待审队列与审核(仅 sre/admin,见 auth.ActionReviewGolden)
 	mux.HandleFunc("GET /v1/golden-cases", a.listGoldenCases)
 	mux.HandleFunc("POST /v1/golden-cases/{id}/review", a.reviewGoldenCase)
+	// 审计日志读取端(仅 sre/admin,见 auth.ActionReadAudit)。
+	// 此前 audit_log 只写不读,越权访问发生后没有界面能回答"谁动了什么"。
+	mux.HandleFunc("GET /v1/audit", a.listAudit)
 
 	// 认证中间件:跳过 healthz / 登录 / signals(webhook 自有鉴权)
 	skip := func(r *http.Request) bool {

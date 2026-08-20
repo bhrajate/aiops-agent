@@ -52,6 +52,57 @@ func TestEffectiveAccessIntersection(t *testing.T) {
 	}
 }
 
+// 新增两个动作的角色边界。这些是"给多了也不会报错"的地方 ——
+// 权限放宽不会有任何测试失败、任何日志告警,只会在事后审计时才发现。
+func TestRBACWorkbenchActions(t *testing.T) {
+	viewer := Principal{Roles: []string{"viewer"}}
+	oncall := Principal{Roles: []string{"oncall"}}
+	sre := Principal{Roles: []string{"sre"}}
+	admin := Principal{Roles: []string{"admin"}}
+
+	// 认领 / 标记已解决:oncall 起。viewer 改状态会让"谁在负责"失真,
+	// 而值班交接完全依赖这个信息。
+	if viewer.Can(ActionUpdateIncident) {
+		t.Error("viewer 不应能变更 incident 状态")
+	}
+	for _, p := range []Principal{oncall, sre, admin} {
+		if !p.Can(ActionUpdateIncident) {
+			t.Errorf("%v 应能变更 incident 状态", p.Roles)
+		}
+	}
+
+	// 审计日志:只给 sre/admin。它跨命名空间且含被拒绝访问的目标 ID,
+	// 那本身能推断出存在哪些资源。
+	for _, p := range []Principal{viewer, oncall} {
+		if p.Can(ActionReadAudit) {
+			t.Errorf("%v 不应能读审计日志", p.Roles)
+		}
+	}
+	for _, p := range []Principal{sre, admin} {
+		if !p.Can(ActionReadAudit) {
+			t.Errorf("%v 应能读审计日志", p.Roles)
+		}
+	}
+}
+
+// 角色是包含关系:viewer ⊂ oncall ⊂ sre ⊂ admin(SECURITY §2)。
+// 断言这个不变量,避免后续加动作时只补了 sre 忘了 admin ——
+// 那会造成 admin 比 sre 权限更小,而没人会想到去测这个方向。
+func TestRoleHierarchyIsNested(t *testing.T) {
+	chain := []string{"viewer", "oncall", "sre", "admin"}
+	for i := 1; i < len(chain); i++ {
+		lower := Principal{Roles: []string{chain[i-1]}}
+		higher := Principal{Roles: []string{chain[i]}}
+		for _, a := range rolePermissions[chain[i-1]] {
+			if !higher.Can(a) {
+				t.Errorf("%s 拥有 %q 但 %s 没有 —— 角色包含关系被破坏",
+					chain[i-1], a, chain[i])
+			}
+			_ = lower
+		}
+	}
+}
+
 func TestHS256IssueAndVerify(t *testing.T) {
 	a := NewAuthenticator(Config{Mode: ModeHS256, HS256Key: "test-secret", Issuer: "aiops-dev", Audience: "aiops"})
 	p := Principal{Subject: "alice", Roles: []string{"sre"}, Clusters: []string{"*"}, Namespaces: []string{"*"}}
