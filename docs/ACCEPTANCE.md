@@ -28,7 +28,7 @@
 
 | 能力 | 落地 | 验证 |
 |---|---|---|
-| 认证 OIDC/JWT | HS256 开发签发 + OIDC 就绪;Bearer 中间件 | 未认证 401、登录、垃圾 token 拒绝 |
+| 认证 OIDC/JWT | HS256 开发签发 + **OIDC 完整实现并测试**;Bearer 中间件 | 未认证 401、登录、垃圾 token 拒绝;**OIDC 12 项**(假 IdP:issuer/audience/过期/算法混淆/未知 kid/缓存/不 fail-open,四条安全断言变异验证过) |
 | 授权 RBAC/ABAC | 角色权限 + 集群/命名空间范围;`用户∩Agent∩Incident` | viewer 启动被拒 403、bob 越权 inventory 403、列表过滤 |
 | mTLS | Gateway↔Agent 双向 TLS(RequireAndVerifyClientCert) | 证书脚本 + 配置开关 |
 | Webhook 签名 | Signal Ingress HMAC-SHA256 | 无签名 401、正确签名 202 |
@@ -184,10 +184,28 @@ cd frontend && npm run e2e:install
 Incident-first / Evidence-first / Workflow-first / Read-only / Deterministic guardrails /
 Least privilege / Fail safely / Replayable / Human-owned / Independent alerting —— 全部落地,详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-## 仍建议在真实生产环境补齐(诚实说明)
+## 仍需真实生产环境的部分(诚实说明)
 
-- 接入企业真实 OIDC IdP(当前 hs256 为开发签发;OIDC verifier 已留接口)。
-- cluster-agent live 数据源对接真实 Prometheus/Loki/Tempo 端点并压测(实现已就绪,默认 mock)。
-- 生产 Secret 走 Vault/KMS 与自动轮换(当前用 K8s Secret 模板)。
-- 执行季度级备份恢复与灾备演练(流程见 DEPLOY.md)。
-- 影子运行 + 小流量 Canary 灰度(门禁框架就绪)。
+下面这些**只剩部署/运维动作**,代码侧已无缺口。区分这一点很要紧:
+写成"待补齐"会让人以为还要改代码,而实际要做的是接线与演练。
+
+| 项 | 代码侧状态 | 还需要做什么 |
+|---|---|---|
+| **OIDC IdP** | ✅ 完整实现 + 12 项测试(假 IdP:自签 RSA + JWKS)。覆盖 issuer/audience/过期/算法混淆/未知 kid/公钥缓存/JWKS 不可用时不 fail-open,四条安全断言都做过变异验证 | 把 `AIOPS_OIDC_ISSUER` / `JWKS_URL` 指向企业 IdP,并确认它签发的 token 里带 `roles`/`clusters`/`namespaces` claim |
+| **真实 Prometheus/Loki/Tempo** | ✅ 实现 + 48 项测试(含 PromQL AST 级 label 强制注入、LogQL 流选择器注入、跨范围 matcher 拒绝)。`check-slo-burnrate.sh` 对**真实 Prometheus 容器** 17/17 | 指向生产端点;**压测**需要真实数据量与查询并发,这一项确实只能在生产做 |
+| **Secret 轮换** | ✅ `AIOPS_WEBHOOK_SECRET` 支持多值,轮换不丢信号(见 SECURITY §密钥轮换)。生产校验拒绝会退化成"不鉴权"的空白值 | Secret 来源换成 External Secrets Operator / CSI driver —— 应用只读环境变量,不需要改 |
+| **备份恢复演练** | — | 纯运维流程(DEPLOY.md)。代码侧无对应物 |
+| **影子 / Canary** | 门禁框架就绪(评测质量门槛可在 CI 拦) | 灰度流程与流量切分 |
+
+### 为什么"深度 RCA 的轮内适应"不在这张表里
+
+它是一个**已评估并刻意否掉**的方案(OPTIMIZATION-LOG 第九轮),不是待办。
+
+改造成 durable agent 能换来轮内适应(模型看到指标尖峰后立刻查那个时间窗的日志,
+而现在计划已固定、只能等下一轮)。但代价有两项是确定的:丢掉事前预算闸门
+(`max_tool_calls` 现在在派发前生效,而 `UsageLimits` 是超了才停),
+以及丢掉"计划作为可审阅对象"。
+
+**收益不确定,代价确定。** 它要等的不是时间,是一个"固定计划导致漏查"的
+生产案例 —— 有了它,收益就从推测变成事实。当前设计已有轮级适应
+(`missing_evidence` → `build_supplemental_plan` → 下一轮),只是粒度粗。
