@@ -151,3 +151,45 @@ AIOPS_WEBHOOK_SECRET="new-secret"
 > Vault / KMS 与自动轮换属于部署侧:把 Secret 的来源换成 External Secrets
 > Operator 或 CSI driver 即可,应用侧不需要改 —— 它只读环境变量。
 > 上面那个多密钥机制正是为了让这类自动轮换**不丢信号**。
+
+## 接入企业 OIDC IdP(实测步骤)
+
+以 Keycloak 26 为例。**这一节是实际跑通一遍后记下来的** —— 开箱配置会让
+每个请求都 403,而症状指向错误的方向(见下)。
+
+```bash
+AIOPS_AUTH_MODE=oidc
+AIOPS_OIDC_ISSUER=https://idp.corp.example/realms/aiops
+AIOPS_OIDC_JWKS_URL=https://idp.corp.example/realms/aiops/protocol/openid-connect/certs
+AIOPS_AUTH_AUDIENCE=aiops
+```
+
+IdP 侧需要三个 protocol mapper 与一处 realm 设置:
+
+| 要什么 | 怎么配 | 不配的后果 |
+|---|---|---|
+| `aud` 含 `aiops` | audience mapper,`included.custom.audience=aiops` | 所有 token 因 audience 不匹配被拒(401) |
+| `clusters` claim | user-attribute mapper,`multivalued=true`,`claim.name=clusters` | ABAC 范围为空 → **每个请求 403** |
+| `namespaces` claim | 同上 | 同上 |
+| 用户属性能写进 token | realm → users/profile → `unmanagedAttributePolicy=ENABLED` | Keycloak 26 默认禁用非托管属性,上面两个 mapper 会**静默输出空值** |
+
+角色**不需要** mapper:本系统会在顶层 `roles` 缺失时回落读
+`realm_access.roles`(Keycloak 放 realm 角色的默认位置)。
+
+### 为什么这一节必须存在
+
+`clusters`/`namespaces` 缺失与角色缺失的症状完全一样,而且**极具误导性**:
+
+- token 校验**通过** —— 日志是"认证成功"
+- 审计记的是"合法身份被拒"(`result=denied`)
+- 指标只是 403 上升
+
+看到这三样,运维会去查 RBAC 角色配置或 ABAC 范围表 —— 而问题在 IdP 侧的
+mapper。为此控制面会在"认证通过但零角色"时单独打一条 WARN 并指名这个原因
+(按 subject 节流 5 分钟)。
+
+另外两处形态差异已在代码里吸收,不需要额外配置:
+
+- `aud` 是**数组**(`["aiops","account"]`),不是字符串
+- `sub` 是 **UUID**;本系统优先用 `preferred_username` 作为审计身份 ——
+  审计里记 UUID 等于记不了责任人
