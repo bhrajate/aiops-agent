@@ -46,6 +46,28 @@
 必须用 `with-backend.sh` 运行(否则 curl 静默失败、断言照着库里残留数据打分,
 通过与失败都没有意义——这是曾经踩过的坑,现在这些脚本会 fail-fast):
 
+**本机 5432 被占时怎么跑。** 脚本的连库方式由 [`scripts/lib/db.sh`](../scripts/lib/db.sh)
+按优先级解析:`AIOPS_PSQL` → `AIOPS_PG_CONTAINER` → compose 里的 postgres → 本机
+`psql` + `AIOPS_DB_DSN`。所以不必停掉占用 5432 的其他服务:
+
+```bash
+docker run -d --name my-pg -e POSTGRES_USER=aiops -e POSTGRES_PASSWORD=aiops \
+  -e POSTGRES_DB=aiops -p 55434:5432 pgvector/pgvector:pg16
+export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:55434/aiops?sslmode=disable"
+export AIOPS_PG_CONTAINER=my-pg      # 脚本自己的断言查这个容器
+cd control-plane && go run ./cmd/control-plane migrate up && cd ..
+for f in shared/seed/*.sql; do docker exec -i my-pg psql -U aiops -d aiops -q -f - < "$f"; done
+```
+
+`db.sh` 在连不上或 SQL 出错时**立刻终止脚本**,绝不返回空串 —— 此前那些
+`psql ... 2>/dev/null` 会让断言收到空值并照着空数据打分(见下方"曾经踩过的坑")。
+
+> 用 Redpanda 时注意:topic 里的消息跨脚本运行保留,而脚本只清库不清 topic。
+> 上一次的消息被重放会产生 `load incident: not found`。逐个脚本之间重建 topic:
+> `docker exec <rp> rpk topic delete signals incidents investigations && rpk topic create ...`。
+> 另外杀掉遗留的 control-plane 进程 —— 消费组里的僵尸成员会占住唯一那个 partition,
+> 导致新实例收不到任何消息(`rpk group describe incident-manager` 看 MEMBERS)。
+
 ```bash
 ./scripts/prod-e2e.sh                       # 全链路(自带构建 + 起后端)
 ./scripts/with-backend.sh scripts/check-two-tier.sh \
