@@ -2,7 +2,7 @@
 # 快速验证 control-plane /metrics 与 OTel 埋点。启动→注入→抓指标→关停。
 set -u
 ROOT="/home/glory/code/ai-generate/aiops"
-export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"
+export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
 export AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233"
 export AIOPS_CLUSTER_AGENT_URL="http://localhost:9100"
 export AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret"

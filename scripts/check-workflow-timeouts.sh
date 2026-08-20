@@ -24,7 +24,7 @@ fi
 ok "构建成功"
 
 BASE_ENV=(
-  AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"
+  AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
   AIOPS_KAFKA_BROKERS="localhost:19092"
   AIOPS_TEMPORAL_HOSTPORT="localhost:7233"
   AIOPS_AUTH_MODE="hs256"

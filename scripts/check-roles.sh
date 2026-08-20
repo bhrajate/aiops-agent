@@ -15,7 +15,7 @@ docker compose -f "$COMPOSE" exec -T redpanda rpk topic delete signals incidents
 docker compose -f "$COMPOSE" exec -T redpanda rpk topic create signals incidents investigations --brokers redpanda:29092 -p 1 -r 1 >/dev/null 2>&1
 docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -c "TRUNCATE signals, incidents, investigations, evidence, hypotheses, investigation_events, human_feedback, outbox, audit_log, idempotency_keys, dead_letters, alert_groups CASCADE;" >/dev/null 2>&1
 
-export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable" AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233" AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret" AIOPS_INTERNAL_TOKEN="internal-dev-token" AIOPS_WEBHOOK_SECRET="webhook-dev-secret"
+export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}" AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233" AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret" AIOPS_INTERNAL_TOKEN="internal-dev-token" AIOPS_WEBHOOK_SECRET="webhook-dev-secret"
 
 # 进程A:仅 API 角色
 AIOPS_ROLES="api,internal" setsid ./control-plane/bin/control-plane > /tmp/cp-roleA.log 2>&1 < /dev/null &

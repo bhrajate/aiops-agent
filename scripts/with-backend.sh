@@ -31,7 +31,7 @@ trap cleanup EXIT
 export AIOPS_ENV=development
 export AIOPS_WEBHOOK_SECRET=webhook-dev-secret
 export AIOPS_INTERNAL_TOKEN=dev-token
-export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"
+export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
 # 对账周期压到 5s(默认 60s)。check-orphan-reconcile.sh 只等 40s,用默认值时
 # 第一轮对账根本还没跑就判失败 —— 那个脚本的注释写"间隔 10s"是错的,
 # 它自己不起后端、设不了这个值,所以只能在这里设。

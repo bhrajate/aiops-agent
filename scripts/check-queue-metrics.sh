@@ -26,7 +26,7 @@ done
 info "构建"
 ( cd control-plane && go build -o /tmp/cp-qm ./cmd/control-plane ) || exit 1
 
-DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"
+DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
 q(){ docker compose -f "$COMPOSE" exec -T postgres psql -U aiops -d aiops -q -c "$1" >/dev/null 2>&1; }
 
 info "造积压:3 条 pending(最老 20 分钟)+ 1 条 dead + 2 条死信"

@@ -42,7 +42,7 @@ done
 LOG=$(mktemp)
 AIOPS_ENV=development AIOPS_ROLES="all" \
 AIOPS_PUBLIC_ADDR=":$PUB" AIOPS_INTERNAL_ADDR=":$INT" \
-AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable" \
+AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}" \
 AIOPS_KAFKA_BROKERS="localhost:19092" \
 AIOPS_INTERNAL_TOKEN=dev-token AIOPS_RETENTION_ENABLED=false \
 /tmp/cp-f7 >"$LOG" 2>&1 &

@@ -5,7 +5,7 @@ set -u
 ROOT="/home/glory/code/ai-generate/aiops"
 BASE=http://localhost:8088
 export GOPROXY=https://goproxy.cn,direct
-export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"
+export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
 export AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233"
 export AIOPS_CLUSTER_AGENT_URL="http://localhost:9100"
 export AIOPS_CONTROL_INTERNAL_URL="http://localhost:8090"

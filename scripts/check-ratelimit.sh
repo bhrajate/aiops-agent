@@ -55,7 +55,7 @@ AIOPS_PUBLIC_ADDR=":$PUB_PORT" \
 AIOPS_INTERNAL_ADDR=":$INT_PORT" \
 AIOPS_INGRESS_RATE_PER_SEC=1 \
 AIOPS_INGRESS_BURST=5 \
-AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable" \
+AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}" \
 AIOPS_INTERNAL_TOKEN=dev-token \
 /tmp/cp-ratelimit >"$LOG" 2>&1 &
 CP_PID=$!

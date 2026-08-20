@@ -32,7 +32,7 @@ LOG=$(mktemp)
 AIOPS_ENV=development \
 AIOPS_ROLES="api,internal" \
 AIOPS_PUBLIC_ADDR=":$PUB" AIOPS_INTERNAL_ADDR=":$INT" \
-AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable" \
+AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}" \
 AIOPS_INTERNAL_TOKEN=dev-token \
 AIOPS_RETENTION_ENABLED=false \
 /tmp/cp-probes >"$LOG" 2>&1 &

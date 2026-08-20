@@ -2,7 +2,7 @@
 # 验证前端 dev server 经代理与认证后端打通:登录 + 带 token 拉数据 + SSE。
 set -u
 ROOT="/home/glory/code/ai-generate/aiops"
-export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"
+export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}"
 export AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233"
 export AIOPS_CLUSTER_AGENT_URL="http://localhost:9100"
 export AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret"

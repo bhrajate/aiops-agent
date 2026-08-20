@@ -3,7 +3,7 @@
 set -u
 ROOT="/home/glory/code/ai-generate/aiops"
 BASE=http://localhost:8088
-export AIOPS_DB_DSN="postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable" AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233" AIOPS_CLUSTER_AGENT_URL="http://localhost:9100" AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret" AIOPS_INTERNAL_TOKEN="internal-dev-token" AIOPS_WEBHOOK_SECRET="webhook-dev-secret"
+export AIOPS_DB_DSN="${AIOPS_DB_DSN:-postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable}" AIOPS_KAFKA_BROKERS="localhost:19092" AIOPS_TEMPORAL_HOSTPORT="localhost:7233" AIOPS_CLUSTER_AGENT_URL="http://localhost:9100" AIOPS_AUTH_MODE="hs256" AIOPS_AUTH_HS256_SECRET="dev-secret" AIOPS_INTERNAL_TOKEN="internal-dev-token" AIOPS_WEBHOOK_SECRET="webhook-dev-secret"
 
 sig(){ # alertname deployment
   local BODY="{\"alerts\":[{\"status\":\"firing\",\"labels\":{\"alertname\":\"$1\",\"severity\":\"warning\",\"namespace\":\"payment\",\"deployment\":\"$2\",\"cluster\":\"prod-cn-1\",\"rule_id\":\"r-$2\"},\"startsAt\":\"2026-07-27T02:00:00Z\"}]}"
