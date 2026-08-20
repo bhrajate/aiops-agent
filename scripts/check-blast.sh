@@ -23,17 +23,17 @@ dbx "TRUNCATE signals, alert_groups, incidents, investigations, evidence, hypoth
 
 echo "=== 服务1 checkout 故障 ==="; sig "HighLatency" "checkout"; sleep 3
 echo "checkout incident blast:"
-dbx "select blast_radius from incidents where affected_resources->0->>'name'='checkout';" 2>/dev/null | sed '/^$/d'
+dbq "select blast_radius from incidents where affected_resources->0->>'name'='checkout';"
 
 echo "=== 服务2 cart 故障(同 namespace)==="; sig "HighLatency" "cart"; sleep 3
 echo "cart incident blast(应 services>=2):"
-dbx "select affected_resources->0->>'name', blast_radius from incidents where affected_resources->0->>'name' in ('checkout','cart') order by 1;" 2>/dev/null | sed '/^$/d'
+dbq "select affected_resources->0->>'name', blast_radius from incidents where affected_resources->0->>'name' in ('checkout','cart') order by 1;"
 
 echo "=== 判定 ==="
 # 注意:两层聚合模型(优化②)下 cart 会**合并进** checkout 所在的 incident,
 # 不再各自成 incident——所以不能按 affected_resources[0]='cart' 去找。
 # 该 namespace 下唯一的活跃 incident 就是判定对象。
-SVC=$(dbx "select (blast_radius->>'services')::int from incidents
+SVC=$(dbq "select (blast_radius->>'services')::int from incidents
     where status in ('open','acknowledged') and correlation_key like '%|payment';" 2>/dev/null | tr -d ' \n')
 if [ "${SVC:-0}" -ge 2 ]; then
   echo "PASS: incident blast.services=$SVC (影响面扩大被捕获)"
@@ -45,7 +45,7 @@ fi
 # F3:services 与 resources / groups 语义不同,不能同值糊过去。
 # 这里两个服务各一个 Deployment 资源,故三者都应为 2;
 # 真正要防的是"同一服务多个 Pod 被算成多服务",由 model.ServiceKey 单测覆盖。
-BR=$(dbx "select blast_radius from incidents
+BR=$(dbq "select blast_radius from incidents
     where status in ('open','acknowledged') and correlation_key like '%|payment';" 2>/dev/null | tr -d ' \n')
 for k in services resources groups namespaces; do
   echo "$BR" | grep -q "\"$k\"" || { echo "FAIL: blast_radius 缺少维度 $k($BR)"; exit 1; }
